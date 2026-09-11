@@ -59,6 +59,28 @@ After successful processing, the app displays the source and calibration measure
 
 The preprocessing thresholds are configurable engineering defaults awaiting evaluation with physical data: standard gravity `9.80665 m/s²`, calibration duration `3.0 s`, minimum calibration count `60`, plausible gravity magnitude `0.75–1.25 g`, maximum adjacent source gap `0.200 s`, maximum calibration vertical-acceleration standard deviation `0.20 m/s²`, maximum calibration gyroscope RMS `0.15 rad/s`, and low-pass cutoff `5.0 Hz`.
 
+## Experimental V1 rep detection
+
+Experimental V1 is a diagnostic, offline rep-detection tool. Select a raw CSV in **Experimental V1 Rep Detection**, choose an exercise and expected AirPod side, then press **Run V1 Detection**. It reports signal quality, committed candidates, provisional candidates, and rejections with their evidence. **Export V1 Results** shares both the JSON analysis summary and JSONL deterministic replay trace.
+
+The supported provisional profiles are:
+
+| Profile | Scalar signal | Detector |
+| --- | --- | --- |
+| Biceps Curl | Gravity projected onto device X, polarity +1 | Neutral-referenced endpoint progress |
+| Lateral Raise | User acceleration projected onto device X, polarity +1 | Positive-then-negative biphasic cycle |
+| Overhead Press | User acceleration projected onto device Y, polarity +1 | Positive-then-negative biphasic cycle |
+
+The processing order is raw CSV decoding, validation, source-time resampling at 50 Hz, profile-specific scalar extraction, the fixed 4 Hz direct-form-II-transposed biquad, neutral acquisition when required, detector state transitions, stable manual exercise authorization, and summary/replay export. Vector fields use linear interpolation. Attitudes use normalized shortest-arc quaternion SLERP, with discontinuities for gaps above 60 ms or angular rates above 20 rad/s. Detector state is reset across breaks so a candidate cannot span one.
+
+Curls require 250 ms of stationary neutral data. The neutral scalar uses the median accepted projection and the neutral attitude uses sign-aligned normalized quaternion averaging. After a completed candidate, the scalar reference adapts 5% toward the ending raw signal and remains within 10% of the endpoint-threshold span around the initial reference. Lateral raises and overhead presses require an initial quiet interval and then a positive lobe followed by a negative lobe. All transitions use three-sample persistence and the documented duration, excursion, area, pause, and refractory limits encoded in `ExperimentalV1Configuration`.
+
+The JSON summary contains versioned configuration, counts, candidate evidence, rejection totals, quality transitions, and warnings. The JSONL trace contains ordered input transactions and resulting detector snapshots; replay checks the first differing transaction and field context. Exported source identity is limited to the filename, never its local path.
+
+Evaluation annotations use a write-once, versioned JSON sidecar containing exercise, completion timestamp, completeness (`complete`, `partial`, or `abandoned`), and an optional note. Annotations must be timestamp-sorted and nonnegative. The evaluator performs one-to-one nearest unmatched candidate matching within 400 ms and reports precision, recall, F1, and separate partial/abandoned-trigger counts. Existing annotation files are never overwritten.
+
+These profiles assume a particular AirPod orientation and selected sensor side; either can materially change the scalar signal. Thresholds and axis assumptions are provisional engineering choices requiring physical-device evaluation. Simulator and synthetic tests validate deterministic mechanics, not real-world rep accuracy. Experimental V1 does not provide live tracking, coaching, set detection, workout history, HealthKit integration, or exercise classification.
+
 ## Physical-device smoke test
 
 This procedure requires real hardware and is not performed by automated tests:
