@@ -8,3 +8,4 @@ xcuserdata/
 *.moved-aside
 .swiftpm/
 *.xcworkspace/xcuserdata/
+.device-build/

@@ -7,16 +7,27 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		04B027484B8EBCE4521D4CC8 /* ProcessedCSVExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 161BAFCB5EE4778AE36CAA31 /* ProcessedCSVExportTests.swift */; };
+		20BCC97EF623D7EA02429A13 /* MotionPreprocessingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54B4317634785E864F24FD91 /* MotionPreprocessingEngine.swift */; };
 		2AA84C8135B54CF4F58435B5 /* LiftPodApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BFEBEA6E650D9651D43EDAA /* LiftPodApp.swift */; };
 		3231B86CC4252986BD1F5DDA /* CSVRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEDCB5421249F1FFA9D77394 /* CSVRecorder.swift */; };
 		3C5EDE5E7CA30AA35CFFDAF0 /* ProviderAbstractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE7E0AB11A54DA75742AE29B /* ProviderAbstractionTests.swift */; };
 		418C351AF8DD34F119F41B8E /* CaptureModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47DCA6D7C094A391C7BFB996 /* CaptureModel.swift */; };
+		7A84C4800357E5700F0A71CC /* PreprocessingTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56AEACB610D0F6F2F938BD27 /* PreprocessingTypes.swift */; };
 		839836FD8E9020B2457E0FD3 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2395946AD1208AE9DB2E66C2 /* TestSupport.swift */; };
 		9712FE571D70AC3EEE0C8DB2 /* CaptureModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEBB831C265D1D414EAEA07 /* CaptureModelTests.swift */; };
+		9DA48DE40ADF52BCDDD23DA2 /* CalibrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424BC3F60A64D037BC04C242 /* CalibrationTests.swift */; };
+		A997986C6BA10EAA83D0B2AC /* VerticalProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3A64A49111B5ADBDF482E2 /* VerticalProjectionTests.swift */; };
+		BF150C7035F6793724CD3AA5 /* RawMotionCSVDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0197CF8015FF8D4D19436C18 /* RawMotionCSVDecoder.swift */; };
 		C01F63774FB52E498A9CAE90 /* RawMotionSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06624E3934144C0B8783D326 /* RawMotionSample.swift */; };
+		D13E97A063A0CC4A7FDA60AB /* OfflinePreprocessingModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D0AC12615399DC46348172A /* OfflinePreprocessingModel.swift */; };
 		D345C2E771771F2C202E0C06 /* CSVRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F13DC5B8F2C5B2C6ED2A0F0 /* CSVRecorderTests.swift */; };
+		D820BD1EDEAE4BBE95B3AC4F /* RawMotionCSVDecoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1A30F418D0A3219A77BF01 /* RawMotionCSVDecoderTests.swift */; };
 		D989C3D243184192D1F0AE50 /* MotionProviding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42FEDFD5EAC1E25D52F8D6FB /* MotionProviding.swift */; };
+		DBC0FE186ABBD2D8B411DC5A /* PreprocessingValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC00E88755590513C3DB7DAB /* PreprocessingValidationTests.swift */; };
 		E0314783B2F96E69ADB26AEA /* SensorLocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F643F75C7CECCA9C06779990 /* SensorLocationTests.swift */; };
+		E60CEFEDB2B36170B4C5AA07 /* LowPassFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FB030F4474BCA1D7B99EF32 /* LowPassFilterTests.swift */; };
+		EAEEFA6968C27C3A5F859C13 /* ProcessedMotionCSVExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC93BA40C527797DD851990 /* ProcessedMotionCSVExporter.swift */; };
 		EB24607EE2390B3246B6C9E5 /* HeadphoneMotionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F6CB61AD53C70092D6E4382 /* HeadphoneMotionProvider.swift */; };
 		F5D214B3E0A955AB01407B0D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8E034C71FD446C4BE7EF5B6 /* ContentView.swift */; };
 /* End PBXBuildFile section */
@@ -32,20 +43,31 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0197CF8015FF8D4D19436C18 /* RawMotionCSVDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawMotionCSVDecoder.swift; sourceTree = "<group>"; };
 		06624E3934144C0B8783D326 /* RawMotionSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawMotionSample.swift; sourceTree = "<group>"; };
+		0DC93BA40C527797DD851990 /* ProcessedMotionCSVExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessedMotionCSVExporter.swift; sourceTree = "<group>"; };
+		161BAFCB5EE4778AE36CAA31 /* ProcessedCSVExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessedCSVExportTests.swift; sourceTree = "<group>"; };
 		2395946AD1208AE9DB2E66C2 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
 		2F13DC5B8F2C5B2C6ED2A0F0 /* CSVRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CSVRecorderTests.swift; sourceTree = "<group>"; };
+		424BC3F60A64D037BC04C242 /* CalibrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationTests.swift; sourceTree = "<group>"; };
 		42FEDFD5EAC1E25D52F8D6FB /* MotionProviding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionProviding.swift; sourceTree = "<group>"; };
 		47DCA6D7C094A391C7BFB996 /* CaptureModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureModel.swift; sourceTree = "<group>"; };
 		4BFEBEA6E650D9651D43EDAA /* LiftPodApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiftPodApp.swift; sourceTree = "<group>"; };
+		54B4317634785E864F24FD91 /* MotionPreprocessingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionPreprocessingEngine.swift; sourceTree = "<group>"; };
+		56AEACB610D0F6F2F938BD27 /* PreprocessingTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreprocessingTypes.swift; sourceTree = "<group>"; };
 		5CEBB831C265D1D414EAEA07 /* CaptureModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureModelTests.swift; sourceTree = "<group>"; };
 		5F6CB61AD53C70092D6E4382 /* HeadphoneMotionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadphoneMotionProvider.swift; sourceTree = "<group>"; };
 		97C017C5EE715FF7F8A75A67 /* LiftPod.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = LiftPod.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9D0AC12615399DC46348172A /* OfflinePreprocessingModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflinePreprocessingModel.swift; sourceTree = "<group>"; };
+		9E1A30F418D0A3219A77BF01 /* RawMotionCSVDecoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawMotionCSVDecoderTests.swift; sourceTree = "<group>"; };
+		9FB030F4474BCA1D7B99EF32 /* LowPassFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LowPassFilterTests.swift; sourceTree = "<group>"; };
 		C012E1EDEC827CAB2F412099 /* LiftPodTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LiftPodTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CC00E88755590513C3DB7DAB /* PreprocessingValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreprocessingValidationTests.swift; sourceTree = "<group>"; };
 		DE7E0AB11A54DA75742AE29B /* ProviderAbstractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAbstractionTests.swift; sourceTree = "<group>"; };
 		DEDCB5421249F1FFA9D77394 /* CSVRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CSVRecorder.swift; sourceTree = "<group>"; };
 		F643F75C7CECCA9C06779990 /* SensorLocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorLocationTests.swift; sourceTree = "<group>"; };
 		F8E034C71FD446C4BE7EF5B6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		FF3A64A49111B5ADBDF482E2 /* VerticalProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalProjectionTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -77,11 +99,17 @@
 		6BB698BA543A7CFA2C9FF4A6 /* LiftPodTests */ = {
 			isa = PBXGroup;
 			children = (
+				424BC3F60A64D037BC04C242 /* CalibrationTests.swift */,
 				5CEBB831C265D1D414EAEA07 /* CaptureModelTests.swift */,
 				2F13DC5B8F2C5B2C6ED2A0F0 /* CSVRecorderTests.swift */,
+				9FB030F4474BCA1D7B99EF32 /* LowPassFilterTests.swift */,
+				CC00E88755590513C3DB7DAB /* PreprocessingValidationTests.swift */,
+				161BAFCB5EE4778AE36CAA31 /* ProcessedCSVExportTests.swift */,
 				DE7E0AB11A54DA75742AE29B /* ProviderAbstractionTests.swift */,
+				9E1A30F418D0A3219A77BF01 /* RawMotionCSVDecoderTests.swift */,
 				F643F75C7CECCA9C06779990 /* SensorLocationTests.swift */,
 				2395946AD1208AE9DB2E66C2 /* TestSupport.swift */,
+				FF3A64A49111B5ADBDF482E2 /* VerticalProjectionTests.swift */,
 			);
 			path = LiftPodTests;
 			sourceTree = "<group>";
@@ -92,10 +120,23 @@
 				CCAFCE2DB26C40452ADDAAF9 /* App */,
 				32ADB041631AE80A43DB4E4F /* Model */,
 				F2FD813EB9FB0EFB0D2C2A61 /* Motion */,
+				852E6DFE041C403681713F6C /* Preprocessing */,
 				689D4B649737A70E16A0679A /* Recording */,
 				CBD25F111A20C71243BD4213 /* State */,
 			);
 			path = LiftPod;
+			sourceTree = "<group>";
+		};
+		852E6DFE041C403681713F6C /* Preprocessing */ = {
+			isa = PBXGroup;
+			children = (
+				54B4317634785E864F24FD91 /* MotionPreprocessingEngine.swift */,
+				9D0AC12615399DC46348172A /* OfflinePreprocessingModel.swift */,
+				56AEACB610D0F6F2F938BD27 /* PreprocessingTypes.swift */,
+				0DC93BA40C527797DD851990 /* ProcessedMotionCSVExporter.swift */,
+				0197CF8015FF8D4D19436C18 /* RawMotionCSVDecoder.swift */,
+			);
+			path = Preprocessing;
 			sourceTree = "<group>";
 		};
 		CBD25F111A20C71243BD4213 /* State */ = {
@@ -218,7 +259,12 @@
 				F5D214B3E0A955AB01407B0D /* ContentView.swift in Sources */,
 				EB24607EE2390B3246B6C9E5 /* HeadphoneMotionProvider.swift in Sources */,
 				2AA84C8135B54CF4F58435B5 /* LiftPodApp.swift in Sources */,
+				20BCC97EF623D7EA02429A13 /* MotionPreprocessingEngine.swift in Sources */,
 				D989C3D243184192D1F0AE50 /* MotionProviding.swift in Sources */,
+				D13E97A063A0CC4A7FDA60AB /* OfflinePreprocessingModel.swift in Sources */,
+				7A84C4800357E5700F0A71CC /* PreprocessingTypes.swift in Sources */,
+				EAEEFA6968C27C3A5F859C13 /* ProcessedMotionCSVExporter.swift in Sources */,
+				BF150C7035F6793724CD3AA5 /* RawMotionCSVDecoder.swift in Sources */,
 				C01F63774FB52E498A9CAE90 /* RawMotionSample.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -228,10 +274,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				D345C2E771771F2C202E0C06 /* CSVRecorderTests.swift in Sources */,
+				9DA48DE40ADF52BCDDD23DA2 /* CalibrationTests.swift in Sources */,
 				9712FE571D70AC3EEE0C8DB2 /* CaptureModelTests.swift in Sources */,
+				E60CEFEDB2B36170B4C5AA07 /* LowPassFilterTests.swift in Sources */,
+				DBC0FE186ABBD2D8B411DC5A /* PreprocessingValidationTests.swift in Sources */,
+				04B027484B8EBCE4521D4CC8 /* ProcessedCSVExportTests.swift in Sources */,
 				3C5EDE5E7CA30AA35CFFDAF0 /* ProviderAbstractionTests.swift in Sources */,
+				D820BD1EDEAE4BBE95B3AC4F /* RawMotionCSVDecoderTests.swift in Sources */,
 				E0314783B2F96E69ADB26AEA /* SensorLocationTests.swift in Sources */,
 				839836FD8E9020B2457E0FD3 /* TestSupport.swift in Sources */,
+				A997986C6BA10EAA83D0B2AC /* VerticalProjectionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

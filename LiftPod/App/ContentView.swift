@@ -1,7 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: CaptureModel
+    @StateObject private var offlineModel = OfflinePreprocessingModel()
+    @State private var showingRawCSVImporter = false
 
     var body: some View {
         NavigationStack {
@@ -9,9 +12,21 @@ struct ContentView: View {
                 statusSection
                 controlsSection
                 sampleSection
+                offlinePreprocessingSection
                 guidanceSection
             }
             .navigationTitle("AirPods Motion")
+            .fileImporter(
+                isPresented: $showingRawCSVImporter,
+                allowedContentTypes: [.commaSeparatedText, .plainText]
+            ) { selection in
+                switch selection {
+                case let .success(url):
+                    Task { await offlineModel.processImportedFile(url) }
+                case let .failure(error):
+                    offlineModel.handleImportFailure(error)
+                }
+            }
         }
     }
 
@@ -28,6 +43,49 @@ struct ContentView: View {
                 Text(error)
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("latest-error")
+            }
+        }
+    }
+
+    private var offlinePreprocessingSection: some View {
+        Section("Offline Preprocessing") {
+            Button("Import Raw CSV") {
+                showingRawCSVImporter = true
+            }
+            .disabled(offlineModel.state == .importing || offlineModel.state == .processing)
+            .accessibilityIdentifier("import-raw-csv")
+
+            statusRow("Processing state", offlineModel.state.rawValue, id: "preprocessing-state")
+            statusRow("Imported samples", String(offlineModel.importedSampleCount), id: "preprocessing-sample-count")
+
+            if let result = offlineModel.result {
+                valueRow("Source duration (s)", number(result.totalSourceDuration), id: "preprocessing-source-duration")
+                valueRow("Effective sample rate (Hz)", number(result.effectiveSampleRate), id: "preprocessing-sample-rate")
+                valueRow("Calibration duration (s)", number(result.calibration.duration), id: "preprocessing-calibration-duration")
+                statusRow("Calibration samples", String(result.calibration.sampleCount), id: "preprocessing-calibration-count")
+                valueRow("Vertical bias (m/s²)", number(result.calibration.verticalBias), id: "preprocessing-vertical-bias")
+                valueRow("Calibration acceleration SD (m/s²)", number(result.calibration.verticalAccelerationStandardDeviation), id: "preprocessing-acceleration-deviation")
+                valueRow("Calibration gyroscope RMS (rad/s)", number(result.calibration.gyroscopeRMSMagnitude), id: "preprocessing-gyroscope-rms")
+                valueRow("Maximum timestamp gap (s)", number(result.maximumSourceTimeGap), id: "preprocessing-maximum-gap")
+            }
+
+            if let error = offlineModel.latestError {
+                Text(error)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("preprocessing-error")
+            }
+
+            if let url = offlineModel.processedCSVURL {
+                ShareLink(item: url) {
+                    Label("Export Processed CSV", systemImage: "square.and.arrow.up")
+                }
+                .accessibilityIdentifier("export-processed-csv")
+            } else {
+                Button {} label: {
+                    Label("Export Processed CSV", systemImage: "square.and.arrow.up")
+                }
+                .disabled(true)
+                .accessibilityIdentifier("export-processed-csv-disabled")
             }
         }
     }

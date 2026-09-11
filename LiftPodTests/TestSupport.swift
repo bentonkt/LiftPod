@@ -105,6 +105,54 @@ func makeSample(index: UInt64 = 1, receiptUptime: Double = 10) -> RawMotionSampl
     )
 }
 
+func syntheticSample(
+    index: UInt64,
+    timestamp: Double,
+    gravity: (Double, Double, Double) = (0, 0, -1),
+    userAcceleration: (Double, Double, Double) = (0, 0, 0),
+    rotationRate: (Double, Double, Double) = (0, 0, 0),
+    sensorLocation: HeadphoneSensorLocation = .leftHeadphone
+) -> RawMotionSample {
+    RawMotionSample(
+        index: index,
+        sourceTimestamp: timestamp,
+        receiptUptime: timestamp + 100,
+        sensorLocation: sensorLocation,
+        userAccelerationX: userAcceleration.0,
+        userAccelerationY: userAcceleration.1,
+        userAccelerationZ: userAcceleration.2,
+        gravityX: gravity.0,
+        gravityY: gravity.1,
+        gravityZ: gravity.2,
+        rotationRateX: rotationRate.0,
+        rotationRateY: rotationRate.1,
+        rotationRateZ: rotationRate.2,
+        quaternionW: 1,
+        quaternionX: 0,
+        quaternionY: 0,
+        quaternionZ: 0,
+        roll: 0,
+        pitch: 0,
+        yaw: 0
+    )
+}
+
+func makeStationarySamples(
+    count: Int = 61,
+    interval: Double = 0.05,
+    userAcceleration: (Double, Double, Double) = (0, 0, 0),
+    rotationRate: (Double, Double, Double) = (0, 0, 0)
+) -> [RawMotionSample] {
+    (0..<count).map { offset in
+        syntheticSample(
+            index: UInt64(offset + 1),
+            timestamp: Double(offset) * interval,
+            userAcceleration: userAcceleration,
+            rotationRate: rotationRate
+        )
+    }
+}
+
 func eventually(
     timeout: Duration = .seconds(1),
     condition: @escaping @MainActor () -> Bool

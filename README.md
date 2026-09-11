@@ -34,6 +34,31 @@ Each file contains one header followed by one row per recorded callback:
 | `quaternion_w/x/y/z` | Attitude quaternion components |
 | `roll`, `pitch`, `yaw` | Attitude angles, radians |
 
+## Offline preprocessing
+
+Use **Import Raw CSV** to select a CSV previously recorded by the app. Processing validates callback order, timestamps, gravity, and source-time gaps; evaluates an initial stationary calibration window; projects user acceleration onto physical up using the measured gravity vector; removes the estimated stationary vertical bias; and applies a causal first-order low-pass filter using each actual source-time interval. The imported file is read without being modified.
+
+The measured gravity vector defines physical down, and its normalized negative defines physical up. Vertical acceleration is positive upward (opposite gravity) and negative downward (along gravity); roll, pitch, yaw, and fixed device axes are not used. The initial window must remain stationary for at least the configured duration and sample count and stay within the acceleration and gyroscope limits, or processing stops with all applicable calibration failures.
+
+For each sample after the first, the filter uses `alpha = 1 - exp(-2 × π × cutoffFrequency × dt)` and `filtered = previousFiltered + alpha × (corrected - previousFiltered)`, where `dt` is the actual adjacent source-time interval. The first filtered value equals the first bias-corrected value.
+
+After successful processing, the app displays the source and calibration measurements. Use **Export Processed CSV** to share the separately generated file. Processed files contain:
+
+| Column | Definition and unit |
+| --- | --- |
+| `index` | Original callback index |
+| `source_timestamp` | Original Core Motion monotonic timestamp, seconds |
+| `delta_time` | Time since the preceding source sample, seconds; zero for the first frame |
+| `sensor_location` | Original reported sensor location |
+| `gravity_magnitude_g` | Gravity-vector magnitude, g |
+| `gyroscope_magnitude_rad_s` | Gyroscope magnitude, radians per second |
+| `vertical_acceleration_raw_m_s2` | User acceleration projected onto physical up, metres per second squared |
+| `vertical_acceleration_corrected_m_s2` | Raw vertical acceleration minus stationary bias, metres per second squared |
+| `vertical_acceleration_filtered_m_s2` | Causal low-pass-filter output, metres per second squared |
+| `is_calibration_sample` | Whether the frame is in the initial calibration window |
+
+The preprocessing thresholds are configurable engineering defaults awaiting evaluation with physical data: standard gravity `9.80665 m/s²`, calibration duration `3.0 s`, minimum calibration count `60`, plausible gravity magnitude `0.75–1.25 g`, maximum adjacent source gap `0.200 s`, maximum calibration vertical-acceleration standard deviation `0.20 m/s²`, maximum calibration gyroscope RMS `0.15 rad/s`, and low-pass cutoff `5.0 Hz`.
+
 ## Physical-device smoke test
 
 This procedure requires real hardware and is not performed by automated tests:
