@@ -1,0 +1,487 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2AA84C8135B54CF4F58435B5 /* LiftPodApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BFEBEA6E650D9651D43EDAA /* LiftPodApp.swift */; };
+		3231B86CC4252986BD1F5DDA /* CSVRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEDCB5421249F1FFA9D77394 /* CSVRecorder.swift */; };
+		3C5EDE5E7CA30AA35CFFDAF0 /* ProviderAbstractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE7E0AB11A54DA75742AE29B /* ProviderAbstractionTests.swift */; };
+		418C351AF8DD34F119F41B8E /* CaptureModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47DCA6D7C094A391C7BFB996 /* CaptureModel.swift */; };
+		839836FD8E9020B2457E0FD3 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2395946AD1208AE9DB2E66C2 /* TestSupport.swift */; };
+		9712FE571D70AC3EEE0C8DB2 /* CaptureModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEBB831C265D1D414EAEA07 /* CaptureModelTests.swift */; };
+		C01F63774FB52E498A9CAE90 /* RawMotionSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06624E3934144C0B8783D326 /* RawMotionSample.swift */; };
+		D345C2E771771F2C202E0C06 /* CSVRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F13DC5B8F2C5B2C6ED2A0F0 /* CSVRecorderTests.swift */; };
+		D989C3D243184192D1F0AE50 /* MotionProviding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42FEDFD5EAC1E25D52F8D6FB /* MotionProviding.swift */; };
+		E0314783B2F96E69ADB26AEA /* SensorLocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F643F75C7CECCA9C06779990 /* SensorLocationTests.swift */; };
+		EB24607EE2390B3246B6C9E5 /* HeadphoneMotionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F6CB61AD53C70092D6E4382 /* HeadphoneMotionProvider.swift */; };
+		F5D214B3E0A955AB01407B0D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8E034C71FD446C4BE7EF5B6 /* ContentView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B350158AE1177992263B32D5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3896EAEE8AC46B556AD4EFCD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 667A7262002A0DFF801EFC82;
+			remoteInfo = LiftPod;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		06624E3934144C0B8783D326 /* RawMotionSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawMotionSample.swift; sourceTree = "<group>"; };
+		2395946AD1208AE9DB2E66C2 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
+		2F13DC5B8F2C5B2C6ED2A0F0 /* CSVRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CSVRecorderTests.swift; sourceTree = "<group>"; };
+		42FEDFD5EAC1E25D52F8D6FB /* MotionProviding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionProviding.swift; sourceTree = "<group>"; };
+		47DCA6D7C094A391C7BFB996 /* CaptureModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureModel.swift; sourceTree = "<group>"; };
+		4BFEBEA6E650D9651D43EDAA /* LiftPodApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiftPodApp.swift; sourceTree = "<group>"; };
+		5CEBB831C265D1D414EAEA07 /* CaptureModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureModelTests.swift; sourceTree = "<group>"; };
+		5F6CB61AD53C70092D6E4382 /* HeadphoneMotionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadphoneMotionProvider.swift; sourceTree = "<group>"; };
+		97C017C5EE715FF7F8A75A67 /* LiftPod.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = LiftPod.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C012E1EDEC827CAB2F412099 /* LiftPodTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LiftPodTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DE7E0AB11A54DA75742AE29B /* ProviderAbstractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAbstractionTests.swift; sourceTree = "<group>"; };
+		DEDCB5421249F1FFA9D77394 /* CSVRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CSVRecorder.swift; sourceTree = "<group>"; };
+		F643F75C7CECCA9C06779990 /* SensorLocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorLocationTests.swift; sourceTree = "<group>"; };
+		F8E034C71FD446C4BE7EF5B6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		259993BDF69903960DCA01F9 = {
+			isa = PBXGroup;
+			children = (
+				74A85A50F0A428AF0C3D9D64 /* LiftPod */,
+				6BB698BA543A7CFA2C9FF4A6 /* LiftPodTests */,
+				E42C301D021A10F8D28D740C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		32ADB041631AE80A43DB4E4F /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				06624E3934144C0B8783D326 /* RawMotionSample.swift */,
+			);
+			path = Model;
+			sourceTree = "<group>";
+		};
+		689D4B649737A70E16A0679A /* Recording */ = {
+			isa = PBXGroup;
+			children = (
+				DEDCB5421249F1FFA9D77394 /* CSVRecorder.swift */,
+			);
+			path = Recording;
+			sourceTree = "<group>";
+		};
+		6BB698BA543A7CFA2C9FF4A6 /* LiftPodTests */ = {
+			isa = PBXGroup;
+			children = (
+				5CEBB831C265D1D414EAEA07 /* CaptureModelTests.swift */,
+				2F13DC5B8F2C5B2C6ED2A0F0 /* CSVRecorderTests.swift */,
+				DE7E0AB11A54DA75742AE29B /* ProviderAbstractionTests.swift */,
+				F643F75C7CECCA9C06779990 /* SensorLocationTests.swift */,
+				2395946AD1208AE9DB2E66C2 /* TestSupport.swift */,
+			);
+			path = LiftPodTests;
+			sourceTree = "<group>";
+		};
+		74A85A50F0A428AF0C3D9D64 /* LiftPod */ = {
+			isa = PBXGroup;
+			children = (
+				CCAFCE2DB26C40452ADDAAF9 /* App */,
+				32ADB041631AE80A43DB4E4F /* Model */,
+				F2FD813EB9FB0EFB0D2C2A61 /* Motion */,
+				689D4B649737A70E16A0679A /* Recording */,
+				CBD25F111A20C71243BD4213 /* State */,
+			);
+			path = LiftPod;
+			sourceTree = "<group>";
+		};
+		CBD25F111A20C71243BD4213 /* State */ = {
+			isa = PBXGroup;
+			children = (
+				47DCA6D7C094A391C7BFB996 /* CaptureModel.swift */,
+			);
+			path = State;
+			sourceTree = "<group>";
+		};
+		CCAFCE2DB26C40452ADDAAF9 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				F8E034C71FD446C4BE7EF5B6 /* ContentView.swift */,
+				4BFEBEA6E650D9651D43EDAA /* LiftPodApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		E42C301D021A10F8D28D740C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				97C017C5EE715FF7F8A75A67 /* LiftPod.app */,
+				C012E1EDEC827CAB2F412099 /* LiftPodTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		F2FD813EB9FB0EFB0D2C2A61 /* Motion */ = {
+			isa = PBXGroup;
+			children = (
+				5F6CB61AD53C70092D6E4382 /* HeadphoneMotionProvider.swift */,
+				42FEDFD5EAC1E25D52F8D6FB /* MotionProviding.swift */,
+			);
+			path = Motion;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5A337310D16FF2313F06ECC5 /* LiftPodTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 306DC7D63047652ED697E06E /* Build configuration list for PBXNativeTarget "LiftPodTests" */;
+			buildPhases = (
+				1BCB8A60A60B321E0DED79DE /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				663CC4E62D193725EA788CAC /* PBXTargetDependency */,
+			);
+			name = LiftPodTests;
+			packageProductDependencies = (
+			);
+			productName = LiftPodTests;
+			productReference = C012E1EDEC827CAB2F412099 /* LiftPodTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		667A7262002A0DFF801EFC82 /* LiftPod */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4009ABC83910D644A62DB752 /* Build configuration list for PBXNativeTarget "LiftPod" */;
+			buildPhases = (
+				17219979D66A79C4938F27FA /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LiftPod;
+			packageProductDependencies = (
+			);
+			productName = LiftPod;
+			productReference = 97C017C5EE715FF7F8A75A67 /* LiftPod.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		3896EAEE8AC46B556AD4EFCD /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					5A337310D16FF2313F06ECC5 = {
+						ProvisioningStyle = Automatic;
+					};
+					667A7262002A0DFF801EFC82 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = E65EC982757C0E172CB7032A /* Build configuration list for PBXProject "LiftPod" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 259993BDF69903960DCA01F9;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = E42C301D021A10F8D28D740C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				667A7262002A0DFF801EFC82 /* LiftPod */,
+				5A337310D16FF2313F06ECC5 /* LiftPodTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		17219979D66A79C4938F27FA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3231B86CC4252986BD1F5DDA /* CSVRecorder.swift in Sources */,
+				418C351AF8DD34F119F41B8E /* CaptureModel.swift in Sources */,
+				F5D214B3E0A955AB01407B0D /* ContentView.swift in Sources */,
+				EB24607EE2390B3246B6C9E5 /* HeadphoneMotionProvider.swift in Sources */,
+				2AA84C8135B54CF4F58435B5 /* LiftPodApp.swift in Sources */,
+				D989C3D243184192D1F0AE50 /* MotionProviding.swift in Sources */,
+				C01F63774FB52E498A9CAE90 /* RawMotionSample.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1BCB8A60A60B321E0DED79DE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D345C2E771771F2C202E0C06 /* CSVRecorderTests.swift in Sources */,
+				9712FE571D70AC3EEE0C8DB2 /* CaptureModelTests.swift in Sources */,
+				3C5EDE5E7CA30AA35CFFDAF0 /* ProviderAbstractionTests.swift in Sources */,
+				E0314783B2F96E69ADB26AEA /* SensorLocationTests.swift in Sources */,
+				839836FD8E9020B2457E0FD3 /* TestSupport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		663CC4E62D193725EA788CAC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 667A7262002A0DFF801EFC82 /* LiftPod */;
+			targetProxy = B350158AE1177992263B32D5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		08063D3D2D7249B0A425E4FD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		15E8133EDCC2E4DB83EFD3A5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		1B8D11263E050E2DD7522DFE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = LiftPod;
+				INFOPLIST_KEY_NSMotionUsageDescription = "LiftPod uses AirPods motion data to display and save raw sensor readings.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.liftpod.rawmotion;
+				PRODUCT_NAME = LiftPod;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		29D5A761CB7D406AA4A05157 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.liftpod.rawmotion.tests;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LiftPod.app/LiftPod";
+			};
+			name = Debug;
+		};
+		B39E7288174E833043351482 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.liftpod.rawmotion.tests;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LiftPod.app/LiftPod";
+			};
+			name = Release;
+		};
+		B8344A98B4F71B60A4483BB0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = LiftPod;
+				INFOPLIST_KEY_NSMotionUsageDescription = "LiftPod uses AirPods motion data to display and save raw sensor readings.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.liftpod.rawmotion;
+				PRODUCT_NAME = LiftPod;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		306DC7D63047652ED697E06E /* Build configuration list for PBXNativeTarget "LiftPodTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				29D5A761CB7D406AA4A05157 /* Debug */,
+				B39E7288174E833043351482 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4009ABC83910D644A62DB752 /* Build configuration list for PBXNativeTarget "LiftPod" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1B8D11263E050E2DD7522DFE /* Debug */,
+				B8344A98B4F71B60A4483BB0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E65EC982757C0E172CB7032A /* Build configuration list for PBXProject "LiftPod" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				08063D3D2D7249B0A425E4FD /* Debug */,
+				15E8133EDCC2E4DB83EFD3A5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 3896EAEE8AC46B556AD4EFCD /* Project object */;
+}
