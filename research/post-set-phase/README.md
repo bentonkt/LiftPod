@@ -1,3 +1,38 @@
+# Gravity-aligned phase-speed correction (v3)
+
+`post-set-local-gravity-speed-v3` replaces the whole-epoch PCA energy gate for
+up/down mapping with local vertical evidence. Each phase requires vertical
+velocity-proxy P95 >= 0.025 m/s, at least 0.01 m proxy travel and 80% dominant-sign
+travel, with opposite signs across the reversal. Vertical RMS must be at least
+35% of 3D velocity-proxy RMS over the cycle. These are heuristic evidence gates,
+not calibrated probabilities or anatomical labels.
+
+The unchanged cycle detector runs on both PCA and gravity-aligned velocity.
+Gravity proposals are preferred if they provide at least as many qualified,
+unambiguously matched directional reps and retain at least 80% of the PCA timing
+coverage. Selection is per uninterrupted epoch, avoiding mixed A/B conventions.
+Uncertain direction remains unknown; counter matching and all existing 3D speed
+fit, drift, uncertainty and boundary sensitivity checks remain unchanged.
+
+Optional `proposalSource` and `directionReason` fields record the decision.
+The post-set card and per-rep table now explain exclusions such as weak vertical
+motion, ambiguous phase association, excessive drift or unstable boundaries.
+The version bump invalidates previous cached analysis when a set is reanalyzed;
+previously saved workout screens are not automatically migrated.
+
+Regression fixture `LiftPodTests/Fixtures/gravity-phase-speed` contains the
+user-reported A295E707 set's prepared frames and counter evidence. V2 mapped no
+directions because whole-set PCA energy was 59%; the v3 regression requires eight
+direction-mapped reps and no extra candidates. One paired speed estimate passes;
+seven remain excluded by the unchanged endpoint-correction limits. This is
+intentional regression coverage of the independent speed gates, not eight
+validated speed measurements.
+Additional tests retain the horizontal-motion fallback with small vertical
+leakage and verify specific exclusion messages. Historical timing/corpus results
+below apply to the older algorithm, not independent validation of v3 boundaries.
+
+---
+
 # Up/down phase speeds in the post-set screen
 
 The sandbox integration adds **Average up speed**, **Average down speed**, and

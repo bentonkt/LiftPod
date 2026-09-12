@@ -131,6 +131,50 @@ final class PostSetPhaseTests: XCTestCase {
         PostSetPhaseService.addSpeeds(to:&invalid,frames:[])
         XCTAssertNil(invalid.reps[0].raisingMeanSpeedMPS)
     }
+    func testRecordedOffAxisSetProducesDirectionalSpeeds() async throws {
+        let fixture=URL(fileURLWithPath:#filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/gravity-phase-speed")
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.copyItem(at:fixture,to:directory)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let result=await PostSetPhaseService.shared.run(directory:directory)
+        XCTAssertEqual(result.algorithmVersion,"post-set-local-gravity-speed-v3")
+        XCTAssertEqual(result.summary.countedReps,8)
+        XCTAssertEqual(result.summary.directionMappedReps,8)
+        XCTAssertEqual(result.summary.unmatchedCandidates,0)
+        XCTAssertTrue(result.reps.allSatisfy { $0.proposalSource == "gravity-aligned" })
+        XCTAssertLessThan(result.reps[0].axisEnergy,0.8)
+        // Direction recovery must not weaken the independent speed-fit gates.
+        // Seven cycles still require excessive endpoint correction in this capture.
+        XCTAssertEqual(result.summary.speedMeasuredReps,1)
+        let rejected=result.reps.filter { $0.aMeanSpeedMPS == nil || $0.bMeanSpeedMPS == nil }
+        XCTAssertEqual(rejected.count,7)
+        XCTAssertTrue(rejected.allSatisfy { $0.speedReason == "excessiveEndpointCorrection" })
+        XCTAssertTrue(rejected.allSatisfy { $0.speedUnavailableExplanation?.contains("drift") == true })
+        XCTAssertNotNil(result.summary.averageRaisingSpeedMPS)
+        XCTAssertNotNil(result.summary.averageLoweringSpeedMPS)
+        print("GRAVITY_RECORDED_RESULT",String(decoding:try JSONEncoder().encode(result),as:UTF8.self))
+    }
+    func testTinyVerticalLeakageDoesNotLabelHorizontalMotion() {
+        let samples=fixture(horizontal:true).map { row in
+            PostSetPhaseSample(time:row.time,epoch:row.epoch,
+                acceleration:row.acceleration + SIMD3<Double>(0,0,0.05*row.acceleration.x),up:row.up)
+        }
+        let result=PostSetPhaseAnalyzer.analyze(setID:UUID(),fingerprint:"horizontal-leakage",samples:samples,counted:[])
+        XCTAssertFalse(result.reps.isEmpty)
+        XCTAssertTrue(result.reps.allSatisfy { $0.aDirection == .unknown && $0.bDirection == .unknown })
+        XCTAssertTrue(result.reps.allSatisfy { $0.directionReason?.contains("Too little vertical") == true })
+    }
+    func testSpecificSpeedExclusionExplanations() {
+        var rep=reps(1)[0]
+        rep.speedReason="excessiveEndpointCorrection"
+        XCTAssertTrue(rep.speedUnavailableExplanation!.contains("drift"))
+        rep.speedReason="ambiguousBoundary"
+        XCTAssertTrue(rep.speedUnavailableExplanation!.contains("boundaries"))
+        rep.speedReason="movement direction unknown";rep.directionReason="No clear up/down reversal was found."
+        XCTAssertEqual(rep.speedUnavailableExplanation,rep.directionReason)
+        rep.aMeanSpeedMPS=0.5;rep.bMeanSpeedMPS=0.5
+        XCTAssertNil(rep.speedUnavailableExplanation)
+    }
     func testElapsedMeaningAndJSONRoundTrip() throws {
         var value=Analysis(setID:UUID(),sourceFingerprint:"test",status:.complete)
         value.reps=reps(6);value.summary=Analysis.aggregate(value.reps,counted:counted(6))

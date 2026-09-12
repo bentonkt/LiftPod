@@ -3,7 +3,7 @@ import simd
 
 /// Derived estimates, never counter authorizations or calibrated anatomical timing.
 struct PostSetPhaseAnalysis: Codable, Equatable, Sendable {
-    static let currentAlgorithmVersion = "post-set-local-drift-speed-v2"
+    static let currentAlgorithmVersion = "post-set-local-gravity-speed-v3"
     enum Status: String, Codable, Sendable { case pending, complete, insufficientEvidence, failed }
     enum Direction: String, Codable, Sendable { case raising, lowering, unknown }
     struct CountedRep: Codable, Equatable, Sendable {
@@ -24,6 +24,21 @@ struct PostSetPhaseAnalysis: Codable, Equatable, Sendable {
         var bMeanSpeedMPS: Double?
         var speedQuality: String?
         var speedReason: String?
+        var directionReason: String?
+        var proposalSource: String?
+        var speedUnavailableExplanation: String? {
+            guard raisingMeanSpeedMPS == nil || loweringMeanSpeedMPS == nil else { return nil }
+            switch speedReason {
+            case "movement direction unknown": return directionReason ?? "Up/down direction could not be established."
+            case "phase timing unavailable": return reason == "ambiguous association" ? "More than one phase interval matches this rep." : "A complete phase interval could not be matched to this rep."
+            case "prepared speed signal unavailable": return "Motion samples needed for speed are missing."
+            case "excessiveEndpointCorrection", "excessiveVerticalClosure": return "Motion drift was too large for a reliable speed estimate."
+            case "ambiguousBoundary", "invalidLandmarks", "invalidInterval": return "Speed was too sensitive to the estimated phase boundaries."
+            case "excessiveUncertainty": return "Motion was too weak or uncertain to estimate speed."
+            case "invalidOrientation": return "Sensor orientation was unreliable."
+            default: return "A reliable phase speed could not be calculated."
+            }
+        }
         var raisingMeanSpeedMPS: Double? {
             guard eligible else { return nil }; return aDirection == .raising ? aMeanSpeedMPS : (bDirection == .raising ? bMeanSpeedMPS : nil)
         }
@@ -358,25 +373,61 @@ enum PostSetPhaseAnalyzer {
             let verticalP95=PhaseDSP.quantile(vertical.map(abs),0.95)
             let alignment=abs(simd_dot(axis,frames[0].up))
             let signalAvailable=PhaseDSP.quantile(raw.map(abs),0.95)>=0.025 && PhaseDSP.quantile(world.map { simd_length($0) },0.95)>=0.35
-            var cycles=PhaseDSP.cycles(t,raw,epoch:frames[0].epoch)
-            for i in cycles.indices {
-                cycles[i].conventionID=convention
-                cycles[i].axisEnergy=energy;cycles[i].verticalAlignment=alignment;cycles[i].verticalP95=verticalP95
-                if !signalAvailable { cycles[i].reason="weak motion signal" }
-                func direction(_ start: Double,_ end: Double) -> (PostSetPhaseAnalysis.Direction,Double) {
-                    var positive=0.0,negative=0.0
-                    for j in 0..<t.count-1 {
-                        let lo=max(start,t[j]),hi=min(end,t[j+1]);if hi<=lo { continue }
-                        let mean=(vertical[j]+vertical[j+1])*0.5
-                        positive+=max(0,mean)*(hi-lo);negative+=max(0,-mean)*(hi-lo)
+            // Direction evidence is local to each proposed cycle. A curved path
+            // need not put 80% of the whole set's energy on one PCA axis.
+            let velocityXYZ=(0..<3).map { component in PhaseDSP.velocity(world.map { $0[component] },t) }
+            func qualify(_ proposals: [PostSetPhaseAnalysis.Rep], source: String) -> [PostSetPhaseAnalysis.Rep] {
+                var cycles=proposals
+                for i in cycles.indices {
+                    cycles[i].conventionID=convention;cycles[i].proposalSource=source
+                    cycles[i].axisEnergy=energy;cycles[i].verticalAlignment=alignment;cycles[i].verticalP95=verticalP95
+                    if !signalAvailable { cycles[i].reason="weak motion signal" }
+                    let indices=t.indices.filter { t[$0]>=cycles[i].start && t[$0]<=cycles[i].end }
+                    let verticalEnergy=indices.reduce(0.0) { $0+vertical[$1]*vertical[$1] }
+                    let totalEnergy=indices.reduce(0.0) { sum,j in sum+(0..<3).reduce(0.0) { $0+velocityXYZ[$1][j]*velocityXYZ[$1][j] } }
+                    let verticalShare=sqrt(verticalEnergy/max(totalEnergy,1e-12))
+                    func direction(_ start: Double,_ end: Double) -> (PostSetPhaseAnalysis.Direction,Double,String?) {
+                        var positive=0.0,negative=0.0,values: [Double]=[]
+                        for j in 0..<t.count-1 {
+                            let lo=max(start,t[j]),hi=min(end,t[j+1]);if hi<=lo { continue }
+                            let mean=(vertical[j]+vertical[j+1])*0.5
+                            positive+=max(0,mean)*(hi-lo);negative+=max(0,-mean)*(hi-lo);values.append(abs(mean))
+                        }
+                        let fraction=max(positive,negative)/max(positive+negative,1e-12)
+                        guard verticalShare>=0.35,PhaseDSP.quantile(values,0.95)>=0.025,positive+negative>=0.01 else {
+                            return (.unknown,fraction,"Too little vertical movement to distinguish up from down.")
+                        }
+                        guard fraction>=0.8 else { return (.unknown,fraction,"Vertical direction changed within an estimated phase.") }
+                        return (positive>negative ? .raising:.lowering,fraction,nil)
                     }
-                    let fraction=max(positive,negative)/max(positive+negative,1e-12)
-                    guard energy>=0.8,alignment>=0.5,verticalP95>=0.025,fraction>=0.8 else { return (.unknown,fraction) }
-                    return (positive>negative ? .raising:.lowering,fraction)
+                    let a=direction(cycles[i].start,cycles[i].reversal),b=direction(cycles[i].reversal,cycles[i].end)
+                    cycles[i].aSignTravel=a.1;cycles[i].bSignTravel=b.1
+                    if a.0 != .unknown && b.0 != .unknown && a.0 != b.0 {
+                        cycles[i].aDirection=a.0;cycles[i].bDirection=b.0
+                    } else { cycles[i].directionReason=a.2 ?? b.2 ?? "No clear up/down reversal was found." }
                 }
-                let a=direction(cycles[i].start,cycles[i].reversal),b=direction(cycles[i].reversal,cycles[i].end)
-                cycles[i].aSignTravel=a.1;cycles[i].bSignTravel=b.1
-                if a.0 != .unknown && b.0 != .unknown && a.0 != b.0 { cycles[i].aDirection=a.0;cycles[i].bDirection=b.0 }
+                return cycles
+            }
+            var cycles=qualify(PhaseDSP.cycles(t,raw,epoch:frames[0].epoch),source:"principal-axis")
+            var gravityCycles=qualify(PhaseDSP.cycles(t,vertical,epoch:frames[0].epoch),source:"gravity-aligned")
+            let localCounted=counted.filter { $0.epoch==frames[0].epoch && $0.end>=t[0] && $0.start<=t.last! }
+            // Compare whole proposal families, avoiding duplicate reps or a switch
+            // in the A/B convention halfway through an uninterrupted epoch.
+            if !localCounted.isEmpty {
+                associate(&cycles,counted:localCounted);associate(&gravityCycles,counted:localCounted)
+            }
+            func mappedCount(_ rows: [PostSetPhaseAnalysis.Rep]) -> Int {
+                rows.filter { (localCounted.isEmpty || $0.eligible) && $0.aDirection != .unknown && $0.bDirection != .unknown }.count
+            }
+            let timingCount=localCounted.isEmpty ? cycles.count : cycles.filter(\.eligible).count
+            if mappedCount(gravityCycles)>=max(1,mappedCount(cycles)),
+               Double(mappedCount(gravityCycles))>=0.8*Double(timingCount) {
+                cycles=gravityCycles
+            }
+            // The final chronological association below assigns global rep numbers.
+            for i in cycles.indices {
+                cycles[i].countedRepID=nil;cycles[i].countedRepNumber=nil
+                if cycles[i].reason != "weak motion signal" { cycles[i].reason="unmatched" }
             }
             result.reps += cycles
         }

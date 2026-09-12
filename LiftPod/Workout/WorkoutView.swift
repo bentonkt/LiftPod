@@ -501,6 +501,13 @@ struct WorkoutView: View {
                     Text("Estimated path speed · \(analysis.summary.speedMeasuredReps ?? 0) of \(analysis.summary.countedReps) reps")
                         .font(.caption).foregroundStyle(.secondary)
                     if analysis.status == .failed { Text("Phase analysis unavailable for this set.").font(.caption).foregroundStyle(.secondary) }
+                    let exclusions=Array(Set(analysis.reps.filter { $0.countedRepID != nil }.compactMap(\.speedUnavailableExplanation))).sorted()
+                    ForEach(exclusions,id: \.self) { explanation in
+                        Text(explanation).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if analysis.reps.allSatisfy({ $0.countedRepID == nil }) {
+                        Text("No complete phase intervals could be matched to the counted reps.").font(.caption).foregroundStyle(.secondary)
+                    }
                     let measured=analysis.reps.filter { $0.countedRepID != nil }.sorted { ($0.countedRepNumber ?? 0)<($1.countedRepNumber ?? 0) }
                     if !measured.isEmpty {
                         DisclosureGroup("Speed by rep") {
@@ -511,6 +518,9 @@ struct WorkoutView: View {
                                     Text(phaseSpeedText(rep.raisingMeanSpeedMPS)).frame(width:90,alignment:.trailing)
                                     Text(phaseSpeedText(rep.loweringMeanSpeedMPS)).frame(width:90,alignment:.trailing)
                                 }.font(.caption).monospacedDigit()
+                                if let explanation=rep.speedUnavailableExplanation {
+                                    Text(explanation).font(.caption2).foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
