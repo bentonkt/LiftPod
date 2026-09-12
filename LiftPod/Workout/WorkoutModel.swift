@@ -81,6 +81,7 @@ struct WorkoutPrescription: Codable, Equatable {
 }
 
 struct WorkoutSetResult: Codable, Identifiable {
+    var phaseAnalysis: PostSetPhaseAnalysis? = nil
     let id: UUID
     let prescription: WorkoutPrescription
     let reps: Int
@@ -330,6 +331,8 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var finalizedElapsedTime: Double?
     private var lastReceipt: Double?
     private var finishing = false
+    private var phaseRequests: [UUID: String] = [:]
+    private var phaseResults: [UUID: PostSetPhaseAnalysis] = [:]
     private var betweenSetStartedAt: Double?
     private var resultBeforePreparation: WorkoutSetResult?
     private var restStartBeforePreparation: Double?
@@ -616,6 +619,16 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         }
 
         enqueueSealedAutomaticReviews(snapshot: snapshot)
+        if let directory = latestRecordingDirectory {
+            for record in snapshot.sets where record.status == .sealed {
+                guard let id = automaticResultIDs[record.id] else { continue }
+                let ids = Set(record.cycleIDs)
+                let counted = snapshot.cycles.filter { ids.contains($0.id) }.map {
+                    PostSetPhaseAnalysis.CountedRep(id:$0.id,epoch:$0.sourceEpoch,start:$0.start,end:$0.completion)
+                }
+                schedulePhaseAnalysis(directory:directory,setID:id,counted:counted,reportedCount:record.count)
+            }
+        }
         if snapshot.state == .finished {
             finalizedElapsedTime = elapsedTime
             let allReps = completedSets.flatMap(\.reps)
@@ -865,6 +878,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             finishedAt: date, slowdownPercent: coach.slowdownPercent,
             averageSpeedMPS: means.isEmpty ? nil : means.reduce(0, +) / Double(means.count),
             peakSpeedMPS: peaks.max(), coaching: coach)
+        value.phaseAnalysis = phaseResults[id]
         value.nextSetPlan = WorkoutCoach.nextSetPlan(for: value)
         return value
     }
@@ -1060,7 +1074,10 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             error = "This set was interrupted. Recorded reps are retained, but coaching is unavailable."
         }
         let bundle = runningGeneric ? await genericSession.completedBundle : await profileEngine.completedBundle
-        if let bundle { latestRecordingDirectory = bundle.directory }
+        if let bundle {
+            latestRecordingDirectory = bundle.directory
+            if runningGeneric { schedulePhaseAnalysis(directory:bundle.directory,setID:completed.id) }
+        }
         saveSession(interrupted: state == .interrupted, recordingDirectory: bundle?.directory.path)
         if let bundle {
             do {
@@ -1073,6 +1090,33 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             error = "The recording could not be saved."
         }
     }
+    private func schedulePhaseAnalysis(directory: URL, setID: UUID,
+        counted: [PostSetPhaseAnalysis.CountedRep]? = nil, reportedCount: Int? = nil) {
+        let key = GenericHash.of([directory.path,GenericHash.of(counted),String(reportedCount ?? -1)])
+        guard phaseRequests[setID] != key else { return }
+        phaseRequests[setID] = key
+        let ownerSessionID = sessionID
+        let pending = PostSetPhaseAnalysis(setID:setID,sourceFingerprint:key,status:.pending)
+        phaseResults[setID] = pending
+        if let index = completedSetResults.firstIndex(where: { $0.id == setID }) { completedSetResults[index].phaseAnalysis = pending }
+        if latestSetResult?.id == setID { latestSetResult?.phaseAnalysis = pending }
+        Task { [weak self] in
+            let analysis = await PostSetPhaseService.shared.run(directory:directory,setID:setID,counted:counted,reportedCount:reportedCount)
+            guard let self, self.sessionID == ownerSessionID, self.phaseRequests[setID] == key,
+                  let index = self.completedSetResults.firstIndex(where: { $0.id == setID }) else { return }
+            self.phaseResults[setID] = analysis
+            self.completedSetResults[index].phaseAnalysis = analysis
+            if self.latestSetResult?.id == setID { self.latestSetResult?.phaseAnalysis = analysis }
+            // Write the captured set, never whichever set is current when work ends.
+            let output = counted == nil ? directory : directory.appendingPathComponent("phase-results/\(setID.uuidString)")
+            do {
+                try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+                try GenericHash.data(self.completedSetResults[index]).write(to:output.appendingPathComponent("set-summary.json"),options:.atomic)
+            } catch { self.error = "Could not save phase summary: \(error.localizedDescription)" }
+            self.saveSession(interrupted:self.state == .interrupted,recordingDirectory:self.latestRecordingDirectory?.path)
+        }
+    }
+
     private func saveSession(interrupted: Bool, recordingDirectory: String?) {
         guard let session, let initialPrescription else { return }
         do {

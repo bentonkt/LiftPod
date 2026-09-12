@@ -204,7 +204,7 @@ final class CaptureModel: ObservableObject {
             var config=AutoWorkoutConfiguration();config.side=side
             try await autoSession.start(configuration:config,root:autoRecordingRoot)
             lastAutoReceipt=nil;lastAutoSource=nil;lastAutoPresentation = -Double.infinity
-            autoWorkout.setExports([])
+            autoWorkout.setExports(await autoSession.exportURLs)
             autoWorkout.apply(snapshot:await autoSession.snapshot)
             startMotion(); startAutoWatchdog()
         } catch {
