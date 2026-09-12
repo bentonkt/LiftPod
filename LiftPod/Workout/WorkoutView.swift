@@ -488,27 +488,10 @@ struct WorkoutView: View {
     private func phaseSpeedReadout(_ set: WorkoutSetResult) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("UP / DOWN SPEED").font(.caption.weight(.semibold)).tracking(1.2)
-            if let analysis=set.phaseAnalysis {
-                if analysis.status == .pending {
-                    ProgressView("Analyzing phase speeds…")
-                } else {
-                    LabeledContent("Average up speed", value:phaseSpeedText(analysis.summary.averageRaisingSpeedMPS))
-                        .accessibilityIdentifier("post-set-up-speed")
-                    LabeledContent("Average down speed", value:phaseSpeedText(analysis.summary.averageLoweringSpeedMPS))
-                        .accessibilityIdentifier("post-set-down-speed")
-                    Text("Estimated path speed · \(analysis.summary.speedMeasuredReps ?? 0) of \(analysis.summary.countedReps) reps")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if analysis.status == .failed { Text("Phase analysis unavailable for this set.").font(.caption).foregroundStyle(.secondary) }
-                    if analysis.status != .failed && (analysis.summary.speedMeasuredReps ?? 0) == 0 {
-                        let explanation=analysis.reps.first(where: { $0.countedRepID != nil })?.speedUnavailableExplanation
-                            ?? "No complete phase intervals could be matched to the counted reps."
-                        Text(explanation).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            } else {
-                Text(workout.automaticRecoveryProvisional ? "Available once this set is finalized." : "No phase speed analysis for this set.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            LabeledContent("Average up speed", value:phaseSpeedText(set.phaseAnalysis?.summary.averageRaisingSpeedMPS))
+                .accessibilityIdentifier("post-set-up-speed")
+            LabeledContent("Average down speed", value:phaseSpeedText(set.phaseAnalysis?.summary.averageLoweringSpeedMPS))
+                .accessibilityIdentifier("post-set-down-speed")
         }.padding(18).glass(radius:22)
             .accessibilityIdentifier("post-set-phase-speeds")
     }

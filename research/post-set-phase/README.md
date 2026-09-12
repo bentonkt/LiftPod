@@ -15,10 +15,9 @@ Uncertain direction remains unknown; counter matching and all existing 3D speed
 fit, drift, uncertainty and boundary sensitivity checks remain unchanged.
 
 Optional `proposalSource` and `directionReason` fields record the decision.
-The post-set card explains unavailable averages caused by weak vertical
-motion, ambiguous phase association, excessive drift or unstable boundaries.
-Only the two set averages are displayed, with a compact measured-rep count;
-individual rep speeds remain stored for analysis but are not shown.
+The post-set card displays only the average up and average down values.
+Individual rep speeds and exclusion details remain stored for analysis but are
+not shown in the workout UI.
 The version bump invalidates previous cached analysis when a set is reanalyzed;
 previously saved workout screens are not automatically migrated.
 
