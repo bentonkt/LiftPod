@@ -11,6 +11,10 @@ struct V2ProcessorSnapshot: Codable, Sendable, Equatable {
     let landmarks: V2CycleLandmarks
     let recentEvents: [V2CycleEvidence]
     var v6Diagnostics: V6Diagnostics? = nil
+    var metrics: RepMetricsSnapshot? = nil
+    var streamVersion: String? = nil
+    var qualityDetail: String? = nil
+    var isRecovering: Bool? = nil
 }
 
 protocol V2RecordingSink: Sendable {
@@ -33,8 +37,11 @@ actor V2SetEngine {
 
     private var profile: V2DSPProfile?
     private var recorder: (any V2RecordingSink)?
-    private var rawSamples: [RawMotionSample] = []
-    private var processedUniformCount = 0
+    private var lastRawSample: RawMotionSample?
+    private var resampler = V2StreamingResampler()
+    private var recoveryStartedAt: Double?
+    private var recoveryNeedsAnchor = false
+    private var qualityDetail: String?
     private var referenceAcquirer = V2ReferenceAcquirer()
     private var v6ReferenceAcquirer = V6ReferenceAcquirer()
     private var filter = ScalarBiquadFilter()
@@ -44,17 +51,21 @@ actor V2SetEngine {
     private var preparationStart: Double?
     private var activationTimestamp: Double?
     private var endRequestTimestamp: Double?
-    private var previousReceipt: Double?
     private var ingestSequence = 0
     private var quality: SignalQualityState = .warmingUp
+    private var metrics: PassiveRepMetrics?
+    private var metricsFrames: [V2MetricsFrameInput] = []
+    private var recordedCommittedIDs: Set<String> = []
+    private var countingDrainComplete = false
 
     func start(profile: V2DSPProfile, recorder: any V2RecordingSink,
                motionActive: Bool, sideVerified: Bool, noOtherRecording: Bool,
-               setupConfirmed: Bool) async throws {
+               setupConfirmed: Bool, metricsConfiguration: RepMetricsConfiguration? = .init()) async throws {
         guard state == .idle || state == .complete || state == .interrupted else {
             throw V2Error.invalidLifecycle("another set is already running")
         }
         let frozen = try profile.validated()
+        let metricsConfiguration = try metricsConfiguration?.validated()
         guard motionActive, sideVerified, noOtherRecording, setupConfirmed else {
             throw V2Error.invalidLifecycle("motion, sensor side, recording, and setup requirements must be satisfied")
         }
@@ -64,7 +75,11 @@ actor V2SetEngine {
                                          hardwareSetupIdentifier: frozen.identity.setupIdentifier)
         try await recorder.start(descriptor: descriptor, profile: frozen)
         self.profile = frozen; self.descriptor = descriptor; self.recorder = recorder
-        rawSamples = []; processedUniformCount = 0; referenceAcquirer.reset(); v6ReferenceAcquirer.reset()
+        metrics = metricsConfiguration.map { PassiveRepMetrics(configuration: $0) }
+        metricsFrames = []; recordedCommittedIDs = []
+        countingDrainComplete = false
+        lastRawSample = nil; resampler = .init(); recoveryStartedAt = nil; recoveryNeedsAnchor = false; qualityDetail = nil
+        referenceAcquirer.reset(); v6ReferenceAcquirer.reset()
         filter = ScalarBiquadFilter(coefficients: frozen.identity.filter)
         let usesV6 = frozen.identity.profileVersion == "experimental-v6"
         segmenter = !usesV6 && frozen.identity.kind == .localCycle
@@ -73,7 +88,7 @@ actor V2SetEngine {
             ? V2TemplateCycleSegmenter(profile: frozen, setDescriptor: descriptor) : nil
         v6Detector = usesV6 ? V6CurlDetector(profile: frozen, descriptor: descriptor) : nil
         preparationStart = nil; activationTimestamp = nil; endRequestTimestamp = nil
-        previousReceipt = nil; ingestSequence = 0; quality = .warmingUp; interruption = nil; completedBundle = nil
+        ingestSequence = 0; quality = .warmingUp; interruption = nil; completedBundle = nil
         state = .preparing
         updateSnapshot(filtered: nil)
     }
@@ -87,30 +102,32 @@ actor V2SetEngine {
         guard profile.identity.expectedSensorSide.matches(sample.sensorLocation) else {
             await interrupt(.wrongSensorSide); return
         }
-        guard allFinite(sample) else { await interrupt(.invalidInput); return }
-        if let previous = rawSamples.last?.sourceTimestamp, sample.sourceTimestamp < previous {
-            await interrupt(.backwardSourceClock); return
-        }
-        if let previousReceipt, sample.receiptUptime - previousReceipt > 0.250 {
-            await interrupt(.staleDelivery); return
-        }
-        previousReceipt = sample.receiptUptime
-        rawSamples.append(sample)
-        let result: MotionResamplingResult
-        do { result = try V2UniformSourceResampler().resample(rawSamples, profile: profile) }
+        let result: V2StreamStep
+        do { result = try resampler.append(sample) }
+        catch V2StreamFailure.backwardClock { await interrupt(.backwardSourceClock); return }
         catch { await interrupt(.invalidInput); return }
-        if result.discontinuityEpochs.contains(where: { $0 > 0 }) {
-            await interrupt(.invalidInput); return
+        lastRawSample = sample
+        if let discontinuity = result.discontinuity {
+            recoveryStartedAt = sample.sourceTimestamp
+            recoveryNeedsAnchor = result.samples.isEmpty
+            quality = discontinuity.state; qualityDetail = discontinuity.reason
+            filter.reset()
+            segmenter?.reset(discontinuity: true)
+            templateSegmenter?.reset(discontinuity: true)
+            v6Detector?.reset(discontinuity: true)
+            metrics?.sourceDiscontinuity(at: sample.sourceTimestamp)
+            if state == .preparing { referenceAcquirer.reset(); v6ReferenceAcquirer.reset() }
         }
-        let newSamples = result.samples.dropFirst(processedUniformCount)
-        processedUniformCount = result.samples.count
+        let newSamples = result.samples
+        metricsFrames.removeAll(keepingCapacity: true)
         for uniform in newSamples { process(uniform, profile: profile) }
         updateSnapshot(filtered: snapshot.filteredSignal)
-        let isV6 = profile.identity.profileVersion == "experimental-v6"
+        let schema = V2RecordingFormat.schema(profile: profile, metrics: metrics?.configuration)
         let transaction = V2ProcessorTransaction(
-            schemaVersion: isV6 ? 6 : 2, processorVersion: isV6 ? "rep-analysis-v6" : "rep-analysis-v2", ingestSequence: ingestSequence,
+            schemaVersion: schema, processorVersion: V2RecordingFormat.processor(schema), ingestSequence: ingestSequence,
             boundary: ingestSequence == 0 ? .start : nil, input: RawMotionEvent(sample), output: snapshot,
-            uniformSamples: Array(newSamples), profileID: profile.profileID, profileHash: profile.contentHash
+            uniformSamples: Array(newSamples), profileID: profile.profileID, profileHash: profile.contentHash,
+            metricsFrames: schema == 7 ? metricsFrames : nil
         )
         do { try await recorder.appendTransaction(transaction) }
         catch { await interrupt(error is V2RecordingQueueError ? .processingQueueOverflow : .recordingFailure); return }
@@ -118,12 +135,16 @@ actor V2SetEngine {
 
         if state == .finalizing, let endRequestTimestamp,
            sample.sourceTimestamp - endRequestTimestamp >= profile.identity.timing.finalizationDrainDuration {
-            await finishComplete()
+            countingDrainComplete = true
+            let pendingDeadline = metrics?.pendingDeadline ?? endRequestTimestamp
+            let metricsDrainEnd = min(endRequestTimestamp + 0.60, pendingDeadline)
+            if sample.sourceTimestamp + 1e-9 >= metricsDrainEnd { await finishComplete() }
         }
     }
 
     func requestEnd(at sourceTimestamp: Double) async throws {
         guard state == .active else { throw V2Error.invalidLifecycle("end is accepted only while active") }
+        guard sourceTimestamp.isFinite else { throw V2Error.invalidLifecycle("end requires a finite source timestamp") }
         state = .finalizing; endRequestTimestamp = sourceTimestamp
         updateSnapshot(filtered: snapshot.filteredSignal)
     }
@@ -139,7 +160,28 @@ actor V2SetEngine {
     func applicationBackgrounded() async { await interrupt(.appBackgrounding) }
 
     private func process(_ sample: ResampledMotionSample, profile: V2DSPProfile) {
+        var boundaryEvidence: [V2BoundaryEvidence] = []
+        metrics?.observe(sample)
+        defer {
+            let events = v6Detector?.events ?? segmenter?.events ?? templateSegmenter?.events ?? []
+            metrics?.observeBoundaryEvidence(boundaryEvidence, at: sample.sourceTimestamp)
+            metrics?.observeCommitted(events, at: sample.sourceTimestamp)
+            if V2RecordingFormat.schema(profile: profile, metrics: metrics?.configuration) == 7 {
+                let newlyCommitted = events.filter { $0.committed && !recordedCommittedIDs.contains($0.id) }
+                recordedCommittedIDs.formUnion(newlyCommitted.map(\.id))
+                metricsFrames.append(.init(sourceTimestamp: sample.sourceTimestamp,
+                                            boundaryEvidence: boundaryEvidence, committedEvents: newlyCommitted))
+            }
+            updateSnapshot(filtered: snapshot.filteredSignal)
+        }
         preparationStart = preparationStart ?? sample.sourceTimestamp
+        if recoveryNeedsAnchor { recoveryStartedAt = sample.sourceTimestamp; recoveryNeedsAnchor = false }
+        if let recoveryStartedAt {
+            guard sample.sourceTimestamp - recoveryStartedAt + 1e-9 >= V2StreamingResampler.recoveryDuration else { return }
+            self.recoveryStartedAt = nil
+            quality = state == .preparing ? .warmingUp : .usable
+            qualityDetail = "Stream recovered; committed count retained"
+        }
         if state == .preparing {
             let reference = profile.identity.profileVersion == "experimental-v6"
                 ? v6ReferenceAcquirer.observe(sample, profile: profile)
@@ -158,8 +200,11 @@ actor V2SetEngine {
             return
         }
         guard let reference = activeReference else { return }
+        // Only passive metrics may consume the extra drain; counting ends at the original boundary.
+        if state == .finalizing && countingDrainComplete { return }
         if var v6Detector {
             let update = v6Detector.observe(sample, reference: reference, departureAllowed: state == .active)
+            boundaryEvidence = update.boundaryEvidence
             for event in v6Detector.events where !event.committed && event.rejectionReason == nil {
                 let withinSet = event.startTimestamp >= (activationTimestamp ?? .infinity) &&
                     (state != .finalizing || event.completionTimestamp <= (endRequestTimestamp ?? -.infinity))
@@ -201,15 +246,18 @@ actor V2SetEngine {
                                 v6Diagnostics: V6Diagnostics? = nil) {
         let events = v6Detector?.events ?? segmenter?.events ?? templateSegmenter?.events ?? []
         snapshot = .init(ingestSequence: ingestSequence, setState: state, quality: quality,
-                         detectorPhase: v6Detector?.phase ?? segmenter?.phase ?? .waitingForBottom,
+                         detectorPhase: recoveryStartedAt != nil ? .recovering : (v6Detector?.phase ?? segmenter?.phase ?? .waitingForBottom),
                          committedCount: events.filter(\.committed).count,
                          reference: reference ?? activeReference, filteredSignal: filtered,
                          landmarks: v6Detector?.landmarks ?? segmenter?.landmarks ?? .init(),
-                         recentEvents: Array(events.suffix(12)), v6Diagnostics: v6Diagnostics ?? snapshot.v6Diagnostics)
+                         recentEvents: Array(events.suffix(12)), v6Diagnostics: v6Diagnostics ?? snapshot.v6Diagnostics,
+                         metrics: metrics?.snapshot, streamVersion: V2StreamingResampler.version,
+                         qualityDetail: qualityDetail, isRecovering: recoveryStartedAt != nil)
     }
 
     private func finishComplete() async {
         guard state == .finalizing else { return }
+        metrics?.finish(at: lastRawSample?.sourceTimestamp ?? 0, interrupted: false)
         state = .complete; updateSnapshot(filtered: snapshot.filteredSignal)
         do {
             guard let bundle = try await recorder?.finalize(state: .complete, failure: nil,
@@ -222,6 +270,7 @@ actor V2SetEngine {
             state = .interrupted
             interruption = .recordingFailure
             quality = .invalidInput
+            qualityDetail = "Recording could not be finalized: \(error.localizedDescription)"
             completedBundle = nil
             updateSnapshot(filtered: snapshot.filteredSignal)
         }
@@ -230,6 +279,14 @@ actor V2SetEngine {
     private func interrupt(_ reason: V2SetInterruption) async {
         guard state != .complete, state != .interrupted else { return }
         state = .interrupted; interruption = reason; quality = qualityFor(reason)
+        switch reason {
+        case .invalidInput: qualityDetail = "Set stopped: a sensor frame contains non-finite values (invalidInput)"
+        case .backwardSourceClock: qualityDetail = "Set stopped: source clock moved backward; start a new capture (backwardSourceClock)"
+        case .recordingFailure: qualityDetail = "Set stopped: recording failed (recordingFailure)"
+        default: qualityDetail = "Set stopped: \(reason.rawValue)"
+        }
+        recoveryStartedAt = nil
+        metrics?.finish(at: lastRawSample?.sourceTimestamp ?? 0, interrupted: true)
         templateSegmenter?.reset(discontinuity: true)
         segmenter?.reset(discontinuity: true)
         v6Detector?.reset(discontinuity: true)
@@ -247,12 +304,4 @@ actor V2SetEngine {
         }
     }
 
-    private func allFinite(_ sample: RawMotionSample) -> Bool {
-        [sample.sourceTimestamp, sample.receiptUptime,
-         sample.userAccelerationX, sample.userAccelerationY, sample.userAccelerationZ,
-         sample.rotationRateX, sample.rotationRateY, sample.rotationRateZ,
-         sample.gravityX, sample.gravityY, sample.gravityZ,
-         sample.quaternionW, sample.quaternionX, sample.quaternionY, sample.quaternionZ,
-         sample.roll, sample.pitch, sample.yaw].allSatisfy(\.isFinite)
-    }
 }

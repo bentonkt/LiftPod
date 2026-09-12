@@ -11,7 +11,7 @@ struct V6ReferenceAcquirer: Sendable {
 
     mutating func observe(_ sample: ResampledMotionSample, profile: V2DSPProfile) -> V2ReferenceMeasurements? {
         guard measurements == nil else { return measurements }
-        let adaptive = profile.identity.algorithm == .adaptiveAxis
+        let adaptive = profile.identity.algorithm == .adaptiveAxis || profile.identity.algorithm == .adaptiveAxisV7
         let axis = V6ProfileConstants.fixedAngularAxis
         let raw = adaptive ? sample.gravity.magnitude :
             (profile.identity.algorithm == .fixedAxisAngular ? V6VectorMath.dot(sample.gravity, axis) :

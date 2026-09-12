@@ -15,6 +15,8 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var latestSample: RawMotionSample?
     @Published private(set) var latestError: String?
     @Published private(set) var completedCSVURL: URL?
+    // The ordered capture consumer forwards every event; UI publication is not a sensor transport.
+    var analysisEventConsumer: (@MainActor (MotionProviderEvent) async -> Void)?
 
     private let provider: any MotionProviding
     private let recorder: any MotionRecording
@@ -95,6 +97,7 @@ final class CaptureModel: ObservableObject {
     }
 
     private func handle(_ event: MotionProviderEvent) async {
+        await analysisEventConsumer?(event)
         switch event {
         case .connected:
             connectionState = .connected

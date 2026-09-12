@@ -3,6 +3,7 @@ import Foundation
 struct V6DetectorUpdate: Sendable {
     let filteredSignal: Double?
     let diagnostics: V6Diagnostics
+    let boundaryEvidence: [V2BoundaryEvidence]
 }
 
 /// Owns all algorithm-specific mutable state. A set freezes one profile and one
@@ -25,7 +26,11 @@ struct V6CurlDetector: Sendable {
     private var fixedAxisInvalid = false
     private var candidateSamples: [ResampledMotionSample] = []
     private var lastRejection: V2RejectionReason?
+    private var sourceSegmentSequence = 0
+    private var pendingSuccessorBoundaryID: String?
+    private var emittedBoundaryEvidence: [V2BoundaryEvidence] = []
     private(set) var events: [V2CycleEvidence] = []
+    private(set) var boundaries: [V2BoundaryEvidence] = []
 
     init(profile: V2DSPProfile, descriptor: V2SetDescriptor) {
         self.profile = profile
@@ -37,7 +42,7 @@ struct V6CurlDetector: Sendable {
 
     var phase: V2DetectorPhase {
         if recoveryStart != nil { return .recovering }
-        if profile.identity.algorithm == .adaptiveAxis, frozenAxis == nil,
+        if usesAdaptiveAxis, frozenAxis == nil,
            segmenter.state == .seekingBottom { return .estimatingAxis }
         switch segmenter.state {
         case .seekingBottom: return .waitingForBottom
@@ -53,11 +58,13 @@ struct V6CurlDetector: Sendable {
     }
 
     mutating func reset(discontinuity: Bool = false) {
+        if discontinuity { sourceSegmentSequence += 1 }
         segmenter.reset(discontinuity: discontinuity)
         signalFilter.reset(); rateFilter.reset(); angle = .init()
         axisBuffer.removeAll(keepingCapacity: true); candidateSamples.removeAll(keepingCapacity: true)
         frozenAxis = nil; previousEstimate = nil; stableEstimateCount = 0; recoveryStart = nil
         unresolvedQuietStart = nil; unresolvedMotionSeen = false; fixedAxisInvalid = false
+        pendingSuccessorBoundaryID = nil; emittedBoundaryEvidence.removeAll(keepingCapacity: true)
     }
 
     mutating func setCommitted(_ committed: Bool, forCandidateID id: String) {
@@ -68,6 +75,7 @@ struct V6CurlDetector: Sendable {
 
     mutating func observe(_ sample: ResampledMotionSample, reference: V2ReferenceMeasurements,
                           departureAllowed: Bool) -> V6DetectorUpdate {
+        emittedBoundaryEvidence.removeAll(keepingCapacity: true)
         switch profile.identity.algorithm {
         case .qualifiedLocalCycle:
             let source = profile.identity.signalSource == .gravity ? sample.gravity : sample.userAcceleration
@@ -78,9 +86,17 @@ struct V6CurlDetector: Sendable {
             guard !fixedAxisInvalid else { return currentUpdate(filtered: nil, signedRate: nil, energyFraction: nil) }
             return observeAngular(sample, reference: reference, axis: V6ProfileConstants.fixedAngularAxis,
                                   energyFraction: nil, departureAllowed: departureAllowed)
-        case .adaptiveAxis:
+        case .adaptiveAxis, .adaptiveAxisV7:
             return observeAdaptive(sample, reference: reference, departureAllowed: departureAllowed)
         }
+    }
+
+    private var usesAdaptiveAxis: Bool {
+        profile.identity.algorithm == .adaptiveAxis || profile.identity.algorithm == .adaptiveAxisV7
+    }
+
+    private var preservesSuccessorTail: Bool {
+        profile.identity.algorithm == .adaptiveAxisV7
     }
 
     private mutating func observeAngular(_ sample: ResampledMotionSample, reference: V2ReferenceMeasurements,
@@ -113,7 +129,11 @@ struct V6CurlDetector: Sendable {
         }
 
         if frozenAxis == nil {
-            guard departureAllowed else { axisBuffer = [sample]; return currentUpdate(filtered: nil, signedRate: nil, energyFraction: nil) }
+            guard departureAllowed else {
+                axisBuffer = [sample]
+                if preservesSuccessorTail { pendingSuccessorBoundaryID = nil }
+                return currentUpdate(filtered: nil, signedRate: nil, energyFraction: nil)
+            }
             axisBuffer.append(sample)
             axisBuffer.removeAll { sample.sourceTimestamp - $0.sourceTimestamp > configuration.maximumDuration }
             if sample.rotationRate.magnitude >= configuration.movementRate { unresolvedMotionSeen = true }
@@ -178,7 +198,7 @@ struct V6CurlDetector: Sendable {
                                   axis: ExperimentalVector3?, energyFraction: Double?,
                                   departureAllowed: Bool) -> V6DetectorUpdate {
         let externalReversal: Bool
-        if profile.identity.algorithm == .adaptiveAxis, segmenter.state == .bottomPending,
+        if usesAdaptiveAxis, segmenter.state == .bottomPending,
            let axis, let returnTime = segmenter.returned?.time,
            let returnFrame = candidateSamples.min(by: { abs($0.sourceTimestamp - returnTime) < abs($1.sourceTimestamp - returnTime) }) {
             let pendingBand = max(0.01, profile.identity.localCycle.trainedSpan * 0.02)
@@ -190,18 +210,19 @@ struct V6CurlDetector: Sendable {
                                        gyroMagnitude: sample.rotationRate.magnitude,
                                        interpolated: sample.interpolationStatus == .interpolated,
                                        departureAllowed: departureAllowed, signedRotationRate: signedRate,
-                                       allowCarryover: profile.identity.algorithm != .adaptiveAxis,
+                                       allowCarryover: !usesAdaptiveAxis,
                                        externalBottomReversal: externalReversal)
+        linkPendingBoundaryToCurrentCandidate()
         if let rejection = result.rejection?.1 {
             lastRejection = rejection
-            if profile.identity.algorithm == .adaptiveAxis {
+            if usesAdaptiveAxis {
                 enterRecovery(at: sample.sourceTimestamp)
                 return currentUpdate(filtered: signal, signedRate: signedRate, energyFraction: energyFraction)
             }
         }
         if let cycle = result.cycle {
             var fraction = energyFraction
-            if let axis, profile.identity.algorithm == .adaptiveAxis {
+            if let axis, usesAdaptiveAxis {
                 let owned = candidateSamples.filter { $0.sourceTimestamp >= cycle.startTime && $0.sourceTimestamp <= cycle.completionTime }
                 let energy = owned.reduce(into: (along: 0.0, total: 0.0)) { partial, frame in
                     let total = V6VectorMath.dot(frame.rotationRate, frame.rotationRate)
@@ -224,14 +245,23 @@ struct V6CurlDetector: Sendable {
                                 returnArea: cycle.returnArea, committed: false, rejectionReason: nil,
                                 movementAxis: axis, axisEnergyFraction: fraction))
             lastRejection = nil
-            if profile.identity.algorithm == .adaptiveAxis { clearAdaptiveCandidate() }
+            if preservesSuccessorTail {
+                recordBoundary(for: cycle, sourceEpoch: sample.epoch)
+                if cycle.completionKind == .continuousReversal, departureAllowed {
+                    prepareSuccessor(from: cycle, confirmedBy: sample)
+                } else {
+                    clearAdaptiveCandidate(); pendingSuccessorBoundaryID = nil
+                }
+            } else if usesAdaptiveAxis {
+                clearAdaptiveCandidate()
+            }
         }
         return currentUpdate(filtered: signal, signedRate: signedRate, energyFraction: energyFraction)
     }
 
     private mutating func fail(_ reason: V2RejectionReason, sample: ResampledMotionSample) -> V6DetectorUpdate {
         lastRejection = reason
-        if profile.identity.algorithm == .adaptiveAxis { enterRecovery(at: sample.sourceTimestamp) }
+        if usesAdaptiveAxis { enterRecovery(at: sample.sourceTimestamp) }
         else {
             segmenter.reset(discontinuity: true); signalFilter.reset(); rateFilter.reset(); angle = .init()
             fixedAxisInvalid = true
@@ -248,6 +278,51 @@ struct V6CurlDetector: Sendable {
         frozenAxis = nil; previousEstimate = nil; stableEstimateCount = 0
         unresolvedQuietStart = nil; unresolvedMotionSeen = false
         axisBuffer.removeAll(keepingCapacity: true); candidateSamples.removeAll(keepingCapacity: true)
+        pendingSuccessorBoundaryID = nil
+    }
+
+    private mutating func prepareSuccessor(from cycle: V6CycleResult,
+                                           confirmedBy sample: ResampledMotionSample) {
+        guard let configuration = profile.identity.adaptiveAxis else {
+            clearAdaptiveCandidate(); pendingSuccessorBoundaryID = nil
+            return
+        }
+        let oldest = sample.sourceTimestamp - configuration.maximumDuration
+        let retained = candidateSamples.filter {
+            $0.sourceTimestamp + 1e-9 >= cycle.completionTime &&
+            $0.sourceTimestamp + 1e-9 >= oldest &&
+            $0.sourceTimestamp <= sample.sourceTimestamp + 1e-9
+        }
+        let boundaryID = boundaries.last?.boundaryID
+        segmenter.reset()
+        signalFilter.reset(); rateFilter.reset(); angle = .init()
+        clearAdaptiveCandidate()
+        axisBuffer = retained
+        pendingSuccessorBoundaryID = boundaryID
+    }
+
+    private mutating func recordBoundary(for cycle: V6CycleResult, sourceEpoch: Int) {
+        let segmentID = "\(descriptor.setID.uuidString.lowercased())-source-\(sourceEpoch)-\(sourceSegmentSequence)"
+        let boundaryID = "\(segmentID)-bottom-\(String(cycle.completionTime.bitPattern, radix: 16))"
+        let evidence = V2BoundaryEvidence(
+            boundaryID: boundaryID, sourceSegmentID: segmentID,
+            observedTimestamp: cycle.completionTime, confirmedTimestamp: cycle.detectionTime,
+            kind: cycle.completionKind, associatedCandidateIDs: [cycle.candidateID],
+            endpointStartTimestamp: cycle.completionTime, endpointEndTimestamp: cycle.detectionTime,
+            returnedTimestamp: cycle.completionTime,
+            direction: cycle.completionKind == .continuousReversal ? .loweringToLifting : .stationary
+        )
+        boundaries.append(evidence)
+        emittedBoundaryEvidence.append(evidence)
+    }
+
+    private mutating func linkPendingBoundaryToCurrentCandidate() {
+        guard let boundaryID = pendingSuccessorBoundaryID, let candidateID = segmenter.candidateID,
+              let index = boundaries.lastIndex(where: { $0.boundaryID == boundaryID }),
+              !boundaries[index].associatedCandidateIDs.contains(candidateID) else { return }
+        boundaries[index].associatedCandidateIDs.append(candidateID)
+        emittedBoundaryEvidence.append(boundaries[index])
+        pendingSuccessorBoundaryID = nil
     }
 
     private func currentUpdate(filtered: Double?, signedRate: Double?, energyFraction: Double?) -> V6DetectorUpdate {
@@ -256,6 +331,7 @@ struct V6CurlDetector: Sendable {
                                  bottomQualified: segmenter.bottomQualified, estimatedAxis: frozenAxis,
                                  axisBufferDuration: axisBuffer.first.map { axisBuffer.last!.sourceTimestamp - $0.sourceTimestamp },
                                  axisEnergyFraction: energyFraction, unwrappedAngle: angle.previous == nil ? nil : angle.value,
-                                 signedRotationRate: signedRate, rejectionReason: lastRejection))
+                                 signedRotationRate: signedRate, rejectionReason: lastRejection),
+              boundaryEvidence: emittedBoundaryEvidence)
     }
 }
