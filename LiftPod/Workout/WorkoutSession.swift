@@ -145,6 +145,7 @@ struct WorkoutSessionReducer {
 }
 
 struct WorkoutSessionArchive: Codable {
+    var exerciseAnnotations: [SetExerciseAnnotation]? = nil
     let schemaVersion: Int
     let sessionID: UUID
     let initialPrescription: WorkoutPrescription
@@ -165,13 +166,13 @@ struct WorkoutSessionArchive: Codable {
 struct SetReviewDraft: Identifiable, Equatable {
     let id: String
     let sessionID: UUID
-    let exercise: V2Exercise
+    var exercise: V2Exercise
     let detectedReps: Int
     let averageRepDuration: Double?
     let endedAt: Date
     var loadLB: Double?
     let velocityProfile: SetVelocityProfile?
-    let automaticRIR: AutomaticRIREstimate?
+    var automaticRIR: AutomaticRIREstimate?
     let precedingSetID: String?
     let precedingRestSeconds: Double?
 

@@ -95,6 +95,7 @@ struct WorkoutSetResult: Codable, Identifiable {
     var peakSpeedMPS: Double? = nil
     var coaching: WorkoutCoachingSnapshot? = nil
     var nextSetPlan: NextSetPlan? = nil
+    var aiAdvice: AISetAdvice? = nil
 
     var targetDescription: String {
         if interrupted { return "Interrupted — target not assessed" }
@@ -285,6 +286,100 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         }
     }
     @Published var automaticSets = false
+    @Published var exerciseAutoDetect = false
+    @Published private(set) var exerciseSuggestion = StableExerciseState()
+    @Published private(set) var classificationError: String?
+    private var classifier: ExerciseClassificationSession?
+    private var acceptingClassificationUpdates = false
+    private var classificationCaptureID: UUID?
+    private var classificationPatternEpoch: Int?
+    private var classificationWatchdog: Task<Void, Never>?
+    private var exerciseAnnotations: [SetExerciseAnnotation] = []
+
+    var classificationAvailable: Bool { countingMode == .generic && !automaticSets }
+    var correctedExercise: V2Exercise? {
+        if let confirmed = exerciseAnnotations.first(where: { $0.captureID == classificationCaptureID })?.confirmedLabel {
+            return confirmed.exercise
+        }
+        guard exerciseSuggestion.manual else { return nil }
+        return exerciseSuggestion.label?.exercise
+    }
+    var correctionChangesPrescription: Bool {
+        correctedExercise.map { $0 != activePrescription.exercise } ?? false
+    }
+    private func beginClassification() async {
+        await freezeClassification()
+        exerciseSuggestion = .init(); classificationError = nil; classificationPatternEpoch = nil
+        guard exerciseAutoDetect, classificationAvailable else { return }
+        let id = UUID(); classificationCaptureID = id
+        acceptingClassificationUpdates = true
+        exerciseSuggestion.status = .warmingUp
+        exerciseAnnotations.append(.init(captureID: id, state: exerciseSuggestion))
+        do {
+            classifier = try ExerciseClassificationSession(captureID: id, directory: sessionDirectory,
+                now: ProcessInfo.processInfo.systemUptime) { [weak self] update in
+                    await self?.receiveClassification(update)
+                }
+            classificationWatchdog = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    guard !Task.isCancelled, let self else { return }
+                    await self.classifier?.tick(now: ProcessInfo.processInfo.systemUptime)
+                }
+            }
+        } catch {
+            classificationError = "Exercise suggestions unavailable: \(error.localizedDescription)"
+            exerciseSuggestion.status = .unavailable
+        }
+    }
+    private func receiveClassification(_ update: ExerciseClassificationSession.Update) {
+        guard acceptingClassificationUpdates, classificationCaptureID == update.captureID else { return }
+        exerciseSuggestion = update.state
+        classificationError = update.loggingError
+        if let index = exerciseAnnotations.firstIndex(where: { $0.captureID == update.captureID }) {
+            exerciseAnnotations[index].state = update.state
+            if !update.state.manual { exerciseAnnotations[index].predictedLabel = update.state.label }
+        }
+    }
+    private func freezeClassification(interrupted: Bool = false) async {
+        acceptingClassificationUpdates = false
+        classificationWatchdog?.cancel(); classificationWatchdog = nil
+        if let classifier {
+            exerciseSuggestion = await classifier.finish(now: ProcessInfo.processInfo.systemUptime, interrupted: interrupted)
+            if let index = exerciseAnnotations.firstIndex(where: { $0.captureID == classificationCaptureID }) {
+                exerciseAnnotations[index].state = exerciseSuggestion
+                if !exerciseSuggestion.manual { exerciseAnnotations[index].predictedLabel = exerciseSuggestion.label }
+            }
+        }
+        classifier = nil
+    }
+    func confirmExerciseSuggestion(_ label: ExerciseLabel) async {
+        guard classificationCaptureID != nil else { return }
+        invalidateLatestAIAdvice()
+        let now = ProcessInfo.processInfo.systemUptime
+        await classifier?.confirm(label, now: now)
+        exerciseSuggestion.label = label; exerciseSuggestion.manual = true
+        exerciseSuggestion.status = .recognized; exerciseSuggestion.reason = "manualOverride"
+        if let index = exerciseAnnotations.firstIndex(where: { $0.captureID == classificationCaptureID }) {
+            exerciseAnnotations[index].confirmedLabel = label
+            exerciseAnnotations[index].correctionTime = now
+            exerciseAnnotations[index].state = exerciseSuggestion
+        }
+        if correctionChangesPrescription {
+            liveRIR = nil
+            coaching = .init(state: .unavailable, slowdownPercent: nil,
+                explanation: "Exercise corrected. Previous exercise-specific advice is unavailable.", evidenceIsValid: false)
+        }
+        saveSession(interrupted: state == .interrupted, recordingDirectory: latestRecordingDirectory?.path)
+    }
+    func reviewedExercise(for draft: SetReviewDraft) -> V2Exercise {
+        exerciseAnnotations.first(where: { $0.setID == draft.id })?.confirmedLabel?.exercise ?? draft.exercise
+    }
+    func reviewedDraft(_ draft: SetReviewDraft) -> SetReviewDraft {
+        var value = draft; value.exercise = reviewedExercise(for: draft)
+        if value.exercise != draft.exercise { value.automaticRIR = nil }
+        return value
+    }
     @Published var countingMode: RepCountingMode = .generic
     @Published private(set) var state: V2SetState = .idle
     @Published private(set) var reps = 0
@@ -329,6 +424,30 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var sessionStartedAtUptime: Double?
     private var finalizedElapsedTime: Double?
     private var lastReceipt: Double?
+    @Published private(set) var aiLoading = false
+    @Published private(set) var aiError: String?
+    private let analyzeAI: @MainActor (AISetRequest, String, String) async throws -> AISetAdvice
+    private var aiInput: AISetRequest?
+    private var aiInputSetID: UUID?
+    private var automaticAIInputs: [UUID: AISetRequest] = [:]
+    private var aiAdviceBySet: [UUID: AISetAdvice] = [:]
+    private var aiExerciseBySet: [UUID: V2Exercise] = [:]
+    var latestAIExercise: V2Exercise? {
+        latestSetResult.flatMap { aiExerciseBySet[$0.id] } ?? latestSetResult?.prescription.exercise
+    }
+    var canAnalyzeLatestSet: Bool {
+        !isRunning && !aiLoading && !automaticRecoveryProvisional &&
+        latestSetResult.map { !$0.interrupted && $0.reps > 0 && $0.id == aiInputSetID } == true
+    }
+    private func invalidateLatestAIAdvice() {
+        aiRequestID = UUID(); aiLoading = false; aiError = nil
+        if let id = latestSetResult?.id {
+            aiAdviceBySet[id] = nil; aiExerciseBySet[id] = nil
+            latestSetResult?.aiAdvice = nil
+            if let index = completedSetResults.firstIndex(where: { $0.id == id }) { completedSetResults[index].aiAdvice = nil }
+        }
+    }
+    private var aiRequestID = UUID()
     private var finishing = false
     private var betweenSetStartedAt: Double?
     private var resultBeforePreparation: WorkoutSetResult?
@@ -348,8 +467,12 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var automaticPostSetCycleCount = 0
 
     init(sessionDirectory: URL? = nil, historyFileURL: URL? = nil,
-         makeProfileRecorder: @escaping () -> any V2RecordingSink = { V2SessionRecorder() }) {
+         makeProfileRecorder: @escaping () -> any V2RecordingSink = { V2SessionRecorder() },
+         analyzeAI: @escaping @MainActor (AISetRequest, String, String) async throws -> AISetAdvice = {
+             try await AIWorkoutCoach().analyze($0, model: $1, apiKey: $2)
+         }) {
         self.sessionDirectory = sessionDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Workouts")
+        self.analyzeAI = analyzeAI
         self.makeProfileRecorder = makeProfileRecorder
         history = WorkoutHistoryStore(fileURL: historyFileURL)
     }
@@ -373,6 +496,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
     var currentPace: Double? { session?.current?.averageDuration }
     var restRecommendation: RestRecommendation? {
+        if correctionChangesPrescription { return nil }
         guard session?.current == nil, let sourceSetID = completedSets.last?.id else { return nil }
         if let confirmed = history.sets.first(where: {
             $0.sessionID == sessionID && $0.sourceSetID == sourceSetID
@@ -386,6 +510,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
 
     var latestSetRIRDescription: String? {
+        if correctionChangesPrescription { return nil }
         guard session?.current == nil, let sourceSetID = completedSets.last?.id else { return nil }
         if let confirmed = history.sets.first(where: {
             $0.sessionID == sessionID && $0.sourceSetID == sourceSetID
@@ -400,6 +525,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
 
     var liveRIRDescription: String? {
+        if correctionChangesPrescription { return nil }
         guard let liveRIR else { return nil }
         return liveRIR.cappedAtFourPlus ? "4+" : String(liveRIR.repsInReserve)
     }
@@ -432,17 +558,30 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
 
     @discardableResult
-    func confirmSet(_ draft: SetReviewDraft, loadLB: Double?, reps: Int, repsInReserve: Int?) -> Bool {
-        guard history.confirm(draft, loadLB: loadLB, reps: reps, repsInReserve: repsInReserve) else {
+    func confirmSet(_ draft: SetReviewDraft, loadLB: Double?, reps: Int, repsInReserve: Int?, exercise: V2Exercise? = nil) -> Bool {
+        var reviewed = reviewedDraft(draft)
+        reviewed.exercise = exercise ?? reviewed.exercise
+        if reviewed.exercise != draft.exercise { reviewed.automaticRIR = nil }
+        guard history.confirm(reviewed, loadLB: loadLB, reps: reps,
+                              repsInReserve: repsInReserve) else {
             error = history.error
             return false
         }
+        if completedSets.last?.id == draft.id && draft.sessionID == sessionID {
+            invalidateLatestAIAdvice()
+        }
         pendingSetReviews.removeAll { $0.sessionID == draft.sessionID && $0.id == draft.id }
+        if let index = exerciseAnnotations.firstIndex(where: { $0.setID == draft.id }) {
+            exerciseAnnotations[index].confirmedLabel = ExerciseLabel.allCases.first { $0.exercise == reviewed.exercise }
+            exerciseAnnotations[index].correctionTime = ProcessInfo.processInfo.systemUptime
+            saveSession(interrupted: state == .interrupted, recordingDirectory: latestRecordingDirectory?.path)
+        }
         error = nil
         return true
     }
 
     func loadPrediction() -> LoadPrediction? {
+        if correctionChangesPrescription { return nil }
         if latestSetResult?.interrupted == true || prescription.loadLB == nil { return nil }
         let draft = completedSets.last.flatMap { latest in
             pendingSetReviews.first { $0.id == latest.id && $0.exercise == prescription.exercise }
@@ -464,8 +603,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func use(_ prediction: LoadPrediction) {
         guard !isRunning, session?.current == nil else { return }
-        prescription.loadLB = prediction.loadLB
-        session?.apply(.selection(prescription))
+        applyNextSet(loadLB: prediction.loadLB, reps: prediction.targetReps, rir: prediction.targetRIR)
     }
 
     var isRunning: Bool { [.preparing, .active, .finalizing].contains(state) || busy }
@@ -477,7 +615,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         case .bicepsCurl: .adaptiveCurlV6
         case .lateralRaise: .lateralRaiseV6
         case .rdl, .gobletSquat, .chestPress, .overheadPress, .externalRotation,
-             .skullCrusher, .lunge, .bentOverRows: nil
+             .skullCrusher, .overheadTricepsExtension, .lunge, .bentOverRows: nil
         }
     }
     var supportedExercise: Bool { automaticSets || countingMode == .generic || selectedProfile != nil }
@@ -507,6 +645,10 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
               !capture.recordingActive, !capture.manualAnalysisActive,
               !capture.automaticTrackingActive else { return }
         automaticSets = true
+        await freezeClassification()
+        classificationCaptureID = nil; exerciseSuggestion = .init(); classificationError = nil
+        aiRequestID = UUID(); aiLoading = false; aiError = nil; aiInput = nil; aiInputSetID = nil
+        automaticAIInputs = [:]; aiAdviceBySet = [:]; aiExerciseBySet = [:]
         bindAutoWorkout(capture)
         prepareAutomaticProjection()
         await capture.startAutoWorkout(side: .right)
@@ -589,6 +731,12 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         }
         completedSetResults = completed
         latestSetResult = completed.last
+        let nextAIID = latestSetResult?.id
+        if aiInputSetID != nextAIID {
+            aiRequestID = UUID(); aiLoading = false; aiError = nil
+        }
+        aiInputSetID = nextAIID
+        aiInput = nextAIID.flatMap { automaticAIInputs[$0] }
 
         if let live = session?.current, let record = recordByID[live.id] {
             applyAutomaticLive(set: live, record: record, snapshot: snapshot, metrics: metrics)
@@ -631,6 +779,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func startSet(_ capture: CaptureModel) async {
         guard canStart(capture) else { return }
+        aiRequestID = UUID(); aiLoading = false; aiError = nil
         busy = true
         defer { busy = false }
         resultBeforePreparation = latestSetResult
@@ -658,6 +807,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         }
         startedAtUptime = ProcessInfo.processInfo.systemUptime
         capture.workoutConsumer = self
+        await beginClassification()
         do {
             if countingMode == .generic {
                 try await genericSession.start(side: .right, metricsEnabled: true,
@@ -675,6 +825,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             await refresh()
         } catch {
             self.error = error.localizedDescription
+            await freezeClassification(interrupted: true)
             restoreAfterAbandonedSet()
         }
     }
@@ -690,6 +841,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         if runningGeneric {
             do { try await genericSession.apply(.init(kind: .sample, raw: RawMotionEvent(sample))) }
             catch { self.error = error.localizedDescription }
+            if state != .finalizing { await classifier?.ingest(sample) }
         } else {
             await profileEngine.ingest(sample)
         }
@@ -700,6 +852,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         guard state == .active, !busy, let latestSourceTime else { return }
         busy = true
         defer { busy = false }
+        await freezeClassification()
         do {
             if runningGeneric {
                 try await genericSession.apply(.init(kind: .end, timestamp: latestSourceTime))
@@ -729,6 +882,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func cancelPreparation() async {
         guard state == .preparing, !busy else { return }
+        await freezeClassification()
         if runningGeneric {
             try? await genericSession.apply(.init(kind: .interrupt, interruption: .explicitCancellation))
         } else {
@@ -739,6 +893,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func motionUnavailable() async {
         guard !automaticSets else { return }
+        await freezeClassification(interrupted: true)
         guard [.preparing, .active, .finalizing].contains(state) else { return }
         if runningGeneric {
             try? await genericSession.apply(.init(kind: .interrupt, interruption: .disconnect))
@@ -759,7 +914,13 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func reset() {
         guard !isRunning, !automaticWorkoutActive else { return }
+        classificationWatchdog?.cancel(); classificationWatchdog = nil
+        let oldClassifier = classifier
+        Task { await oldClassifier?.finish(now: ProcessInfo.processInfo.systemUptime) }
+        classifier = nil; classificationCaptureID = nil; exerciseSuggestion = .init(); exerciseAnnotations = []
         repSpeedSeries = RepSpeedSeries()
+        aiRequestID = UUID(); aiLoading = false; aiError = nil; aiInput = nil
+        aiInputSetID = nil; automaticAIInputs = [:]; aiAdviceBySet = [:]; aiExerciseBySet = [:]
         liveRepSpeedMPS = nil; liveSpeedDegradationPercent = nil
         liveRIR = nil; cachedRIRProfile = nil; cachedRIRPrescription = nil
         state = .idle; result = nil; latestSetResult = nil; summaryURL = nil; error = nil
@@ -866,6 +1027,14 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             averageSpeedMPS: means.isEmpty ? nil : means.reduce(0, +) / Double(means.count),
             peakSpeedMPS: peaks.max(), coaching: coach)
         value.nextSetPlan = WorkoutCoach.nextSetPlan(for: value)
+        if record.status == .sealed {
+            automaticAIInputs[id] = AISetRequest(prescription: set.prescription,
+                reps: set.reps.map { AIRepSummary(rep: $0, generic: metrics[$0.id]) },
+                speedDegradationPercent: profile?.velocityLossPercent,
+                speedMeasurement: "whole-rep 3D device speed", signalUsable: profile != nil,
+                interrupted: false)
+            value.aiAdvice = aiAdviceBySet[id]
+        }
         return value
     }
 
@@ -875,6 +1044,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         snapshot: AutoWorkoutSnapshot,
         metrics: [String: GenericCycleMetrics]
     ) {
+        if aiLoading { aiRequestID = UUID(); aiLoading = false }
         reps = record.count
         learningMovement = false
         state = .active
@@ -977,6 +1147,14 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         liveRepSpeedMPS = latestFinalizedRepSpeed()
         let currentReps = session?.current?.reps ?? []
         let activeEpoch = snapshot.generic?.learningEpoch ?? 0
+        if let prior = classificationPatternEpoch, prior != activeEpoch {
+            await classifier?.patternChanged(now: ProcessInfo.processInfo.systemUptime)
+        }
+        classificationPatternEpoch = activeEpoch
+        if let index = exerciseAnnotations.firstIndex(where: { $0.captureID == classificationCaptureID }),
+           let setID = session?.current?.id {
+            exerciseAnnotations[index].setID = setID
+        }
         let chartSpeeds: [Double?] = currentReps.map { rep in
             if runningGeneric {
                 let metric = genericMetrics[rep.id]
@@ -1004,6 +1182,11 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             prescription: currentPrescription, rirEstimate: signalUsable ? liveRIR : nil,
             signalUsable: signalUsable)
         state = snapshot.setState
+        if correctionChangesPrescription {
+            liveRIR = nil
+            coaching = .init(state: .unavailable, slowdownPercent: nil,
+                explanation: "Exercise corrected. Previous exercise-specific advice is unavailable.", evidenceIsValid: false)
+        }
         if state == .interrupted {
             coaching = .init(state: .unavailable, slowdownPercent: nil,
                              explanation: "The set ended before coaching evidence could be finalized.",
@@ -1011,6 +1194,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         }
         guard [.complete, .interrupted].contains(state), latestSetResult == nil, !finishing,
               let frozenPrescription else { return }
+        await freezeClassification(interrupted: state == .interrupted)
         finishing = true
         defer { finishing = false }
         let setCountBeforeEnd = previousSetCount
@@ -1050,6 +1234,21 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         completed.nextSetPlan = completed.interrupted ? WorkoutCoach.nextSetPlan(for: completed) :
             (loadPrediction().map { WorkoutCoach.nextSetPlan(from: $0) }
                 ?? WorkoutCoach.nextSetPlan(for: completed))
+        let profileByID = Dictionary((profileMetrics?.reps ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        let repSummaries = accepted.map { rep in
+            runningGeneric ? AIRepSummary(rep: rep, generic: genericMetrics[rep.id])
+                           : AIRepSummary(rep: rep, profile: profileByID[rep.id])
+        }
+        let degradation = completed.slowdownPercent.flatMap { $0.isFinite ? ($0 * 10).rounded() / 10 : nil }
+        aiInput = AISetRequest(prescription: frozenPrescription, reps: repSummaries,
+            speedDegradationPercent: degradation,
+            speedMeasurement: runningGeneric ? "whole-rep 3D device speed" : "lifting-phase 3D device speed",
+            signalUsable: signalUsable, interrupted: completed.interrupted)
+        aiInputSetID = completed.id
+        if correctionChangesPrescription {
+            completed.nextSetPlan = .init(action: .noRecommendation, title: "No load recommendation",
+                explanation: "Exercise corrected. Review the set before using exercise-specific advice.")
+        }
         completedSetResults.append(completed)
         latestSetResult = completed
         betweenSetStartedAt = ProcessInfo.processInfo.systemUptime
@@ -1073,11 +1272,71 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             error = "The recording could not be saved."
         }
     }
+    func analyzeLatestSet(model: String, apiKey: String) async {
+        guard canAnalyzeLatestSet, let set = latestSetResult, var input = aiInput,
+              !set.interrupted, set.reps > 0 else { return }
+        let requestID = UUID()
+        aiRequestID = requestID; aiLoading = true; aiError = nil
+        if let sourceID = completedSets.last?.id,
+           let confirmed = history.sets.first(where: { $0.sessionID == sessionID && $0.sourceSetID == sourceID }) {
+            input.prescription.exercise = confirmed.exercise
+            input.confirmedReps = confirmed.reps
+            input.confirmedLoadLB = confirmed.loadLB
+            if confirmed.rirValueSource == .userEntered { input.confirmedRIR = confirmed.repsInReserve }
+        }
+        if let annotation = exerciseAnnotations.first(where: { $0.setID == completedSets.last?.id }),
+           let exercise = annotation.confirmedLabel?.exercise {
+            if input.prescription.exercise != exercise { input.confirmedRIR = nil }
+            input.prescription.exercise = exercise
+        }
+        defer { if aiRequestID == requestID { aiLoading = false } }
+        do {
+            let advice = try await analyzeAI(input, model, apiKey)
+            try Task.checkCancellation()
+            guard aiRequestID == requestID, latestSetResult?.id == set.id, !isRunning,
+                  !automaticRecoveryProvisional else { return }
+            aiAdviceBySet[set.id] = advice
+            aiExerciseBySet[set.id] = input.prescription.exercise
+            latestSetResult?.aiAdvice = advice
+            if let index = completedSetResults.firstIndex(where: { $0.id == set.id }) {
+                completedSetResults[index].aiAdvice = advice
+            }
+            saveSession(interrupted: false, recordingDirectory: summaryURL?.deletingLastPathComponent().path)
+            if let summaryURL, let latestSetResult {
+                try JSONEncoder().encode(latestSetResult).write(to: summaryURL, options: .atomic)
+            }
+        } catch is CancellationError { }
+        catch { if aiRequestID == requestID { aiError = error.localizedDescription } }
+    }
+
+    func useAIAdvice() {
+        guard !isRunning, let set = latestSetResult, let next = set.aiAdvice?.nextSet,
+              !automaticRecoveryProvisional, prescription.exercise == latestAIExercise else { return }
+        applyNextSet(loadLB: next.loadLB, reps: next.reps, rir: next.targetRIR)
+    }
+
+    func isNextSetSelected(loadLB: Double, reps: Int, rir: Int) -> Bool {
+        prescription.loadLB == loadLB && prescription.minimumReps == reps &&
+            prescription.maximumReps == reps && prescription.targetRIR == rir
+    }
+
+    private func applyNextSet(loadLB: Double, reps: Int, rir: Int) {
+        guard !isRunning, session?.current == nil else { return }
+        var next = prescription
+        next.loadLB = loadLB
+        next.minimumReps = reps; next.maximumReps = reps
+        next.targetRIR = rir
+        guard next.isValid else { return }
+        prescription = next
+        session?.apply(.selection(next))
+    }
+
     private func saveSession(interrupted: Bool, recordingDirectory: String?) {
         guard let session, let initialPrescription else { return }
         do {
             try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
-            let archive = WorkoutSessionArchive(schemaVersion: 1, sessionID: sessionID,
+            let archive = WorkoutSessionArchive(exerciseAnnotations: exerciseAnnotations.isEmpty ? nil : exerciseAnnotations,
+                schemaVersion: 1, sessionID: sessionID,
                 initialPrescription: initialPrescription, policy: session.policy, inputs: session.inputs,
                 sets: session.sets, interrupted: interrupted, recordingDirectory: recordingDirectory,
                 setResults: completedSetResults)

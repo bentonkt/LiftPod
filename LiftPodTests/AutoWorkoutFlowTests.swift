@@ -3,6 +3,32 @@ import XCTest
 
 @MainActor
 final class AutoWorkoutFlowTests: XCTestCase {
+    func testMergedCoachWaitsForSealedSetAndRetainsAdviceAcrossSnapshots() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var requests: [AISetRequest] = []
+        let model = WorkoutModel(sessionDirectory: directory, historyFileURL: directory.appendingPathComponent("history.json"),
+            analyzeAI: { input, _, _ in
+                requests.append(input)
+                return .init(estimatedRIR: nil, confidence: "low", notes: "Sealed set only", weakPoints: [], nextSet: nil)
+            })
+        model.automaticSets = true
+        let reps = cycles("merged", count: 3, start: 1)
+        var set = AutoSetRecord(id: "merged-set", cycleIDs: reps.map(\.id), start: reps[0].start, end: reps[2].completion)
+        model.synchronizeAutomatic(snapshot: snapshot(sets: [set], cycles: reps, timestamp: 10, rest: 8, status: "Recovery"))
+        XCTAssertFalse(model.canAnalyzeLatestSet)
+        await model.analyzeLatestSet(model: "stub", apiKey: "")
+        XCTAssertTrue(requests.isEmpty)
+        set.status = .sealed; set.sealedAt = 20
+        let sealed = snapshot(sets: [set], cycles: reps, timestamp: 20, rest: 8, status: "Recovery")
+        model.synchronizeAutomatic(snapshot: sealed)
+        XCTAssertTrue(model.canAnalyzeLatestSet)
+        await model.analyzeLatestSet(model: "stub", apiKey: "")
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.reps.count, 3)
+        model.synchronizeAutomatic(snapshot: sealed)
+        XCTAssertEqual(model.latestSetResult?.aiAdvice?.notes, "Sealed set only")
+    }
     func testReadyLiveRestContinuationAndNewSetProjection() throws {
         let model = makeModel()
         model.automaticSets = true

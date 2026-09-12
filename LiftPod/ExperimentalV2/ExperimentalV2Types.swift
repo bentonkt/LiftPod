@@ -10,6 +10,7 @@ enum V2Exercise: String, Codable, CaseIterable, Sendable, Identifiable {
     case bicepsCurl = "Biceps Curl"
     case externalRotation = "External Rotation"
     case skullCrusher = "Skull Crusher"
+    case overheadTricepsExtension = "Overhead Triceps Extension"
     case lunge = "Lunge"
     case bentOverRows = "Bent Over Rows"
     var id: String { rawValue }
