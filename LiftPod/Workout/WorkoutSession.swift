@@ -2,8 +2,9 @@ import Combine
 import Foundation
 
 struct WorkoutPolicy: Codable, Equatable {
-    var version = "automatic-sets-v1"
+    var version = "manual-sets-v1"
     var inactivitySeconds = 12.0
+    var automaticBoundaries: Bool { version.hasPrefix("automatic-") }
 }
 
 struct SessionRep: Codable, Equatable {
@@ -62,7 +63,8 @@ struct WorkoutSessionReducer {
         case let .rep(rep):
             guard rep.valid, rep.exercise == prescription.exercise, rep.start >= boundary, !seen.contains(rep.id) else { return }
             if let last = current?.reps.last, rep.start < last.end { return }
-            if let last = current?.reps.last, rep.end - last.end >= policy.inactivitySeconds {
+            if policy.automaticBoundaries, let last = current?.reps.last,
+               rep.end - last.end >= policy.inactivitySeconds {
                 close(reason: "inactivity", boundary: last.end)
             }
             if let current, current.prescription.exercise != rep.exercise {
@@ -75,7 +77,7 @@ struct WorkoutSessionReducer {
             }
             current!.reps.append(rep)
         case let .clock(time):
-            guard time.isFinite, let last = current?.reps.last,
+            guard policy.automaticBoundaries, time.isFinite, let last = current?.reps.last,
                   time - last.end >= policy.inactivitySeconds else { return }
             close(reason: "inactivity", boundary: last.end)
         case let .selection(value):
@@ -114,6 +116,7 @@ struct WorkoutSessionArchive: Codable {
     let sets: [SessionSet]
     let interrupted: Bool
     let recordingDirectory: String?
+    var setResults: [WorkoutSetResult]? = nil
 
     func replay() -> WorkoutSessionReducer {
         var reducer = WorkoutSessionReducer(prescription: initialPrescription, policy: policy)

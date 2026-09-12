@@ -46,6 +46,74 @@ final class WorkoutSummaryTests: XCTestCase {
     }
 }
 
+final class ManualWorkoutFlowTests: XCTestCase {
+    func testManualPolicyIgnoresTimeAndStartsNextSetOnlyAfterExplicitBoundary() {
+        var session = WorkoutSessionReducer(prescription: .init())
+        session.apply(.rep(.init(id: "one", start: 0, end: 2)))
+        session.apply(.clock(100))
+        session.apply(.rep(.init(id: "two", start: 100, end: 102)))
+        XCTAssertEqual(session.current?.reps.map(\.id), ["one", "two"])
+        XCTAssertTrue(session.sets.isEmpty)
+
+        session.apply(.closeSet(103))
+        session.apply(.rep(.init(id: "three", start: 104, end: 106)))
+        XCTAssertEqual(session.sets.first?.reps.map(\.id), ["one", "two"])
+        XCTAssertEqual(session.current?.reps.map(\.id), ["three"])
+    }
+
+    func testQualifiedSlowdownProducesTargetReachedAndKeepLoadPlan() {
+        let setID = UUID()
+        let speeds = [1.0, 1.0, 1.0, 0.8, 0.8]
+        let reps = speeds.enumerated().map { index, speed -> RepMotionMetrics in
+            var metric = RepMotionMetrics(id: "rep-\(index)", setID: setID, updatedAt: Double(index))
+            metric.status = .available
+            metric.reason = nil
+            metric.meanLiftingSpeed = speed
+            return metric
+        }
+        let metrics = RepMetricsSnapshot(configuration: .init(), configurationHash: "test", reps: reps)
+        let snapshot = V2ProcessorSnapshot(
+            ingestSequence: 1, setState: .active, quality: .usable, detectorPhase: .ready,
+            committedCount: 5, reference: nil, filteredSignal: nil, landmarks: .init(),
+            recentEvents: [], metrics: metrics)
+        let coaching = WorkoutCoach.evaluate(snapshot: snapshot, reps: 8, prescription: .init())
+        XCTAssertEqual(coaching.state, .targetReached)
+        XCTAssertEqual(coaching.slowdownPercent ?? 0, 20, accuracy: 0.001)
+
+        var result = WorkoutSetResult(id: setID, prescription: .init(), reps: 8,
+                                      averageRepDuration: nil, movementDuration: nil,
+                                      interrupted: false, finishedAt: Date(),
+                                      slowdownPercent: coaching.slowdownPercent, coaching: coaching)
+        result.nextSetPlan = WorkoutCoach.nextSetPlan(for: result)
+        XCTAssertEqual(result.nextSetPlan?.action, .keepLoad)
+    }
+
+    func testUnavailableMetricsNeverProduceLoadAdvice() {
+        let snapshot = V2ProcessorSnapshot(
+            ingestSequence: 1, setState: .active, quality: .stale, detectorPhase: .recovering,
+            committedCount: 4, reference: nil, filteredSignal: nil, landmarks: .init(),
+            recentEvents: [], qualityDetail: "Motion stream is stale", isRecovering: true)
+        let coaching = WorkoutCoach.evaluate(snapshot: snapshot, reps: 4, prescription: .init())
+        XCTAssertEqual(coaching.state, .unavailable)
+        let result = WorkoutSetResult(id: UUID(), prescription: .init(), reps: 4,
+                                      averageRepDuration: nil, movementDuration: nil,
+                                      interrupted: true, finishedAt: Date(), coaching: coaching)
+        XCTAssertEqual(WorkoutCoach.nextSetPlan(for: result).action, .noRecommendation)
+    }
+
+    func testSteadyFullRangeSuggestsHeavierLoad() {
+        let coaching = WorkoutCoachingSnapshot(
+            state: .targetReached, slowdownPercent: 4,
+            explanation: "You reached the top of your target range.", evidenceIsValid: true)
+        let result = WorkoutSetResult(
+            id: UUID(), prescription: .init(), reps: 12,
+            averageRepDuration: nil, movementDuration: nil,
+            interrupted: false, finishedAt: Date(), slowdownPercent: 4, coaching: coaching)
+
+        XCTAssertEqual(WorkoutCoach.nextSetPlan(for: result).action, .considerHeavierLoad)
+    }
+}
+
 @MainActor
 final class WorkoutCaptureRoutingTests: XCTestCase {
     func testCompletedWorkoutFreezesInputsAndSavesSummary() async throws {
@@ -84,18 +152,46 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertNotNil(model.currentPace)
         XCTAssertGreaterThan(model.activeTime, 0)
         XCTAssertLessThan(model.activeTime, model.elapsedTime)
-        await model.end()
+        await model.endSet()
         XCTAssertEqual(model.state, .finalizing)
         for index in samples.count..<(samples.count + 25) { await model.ingest(raw(index)) }
         XCTAssertEqual(model.state, .complete)
+        let setResult = try XCTUnwrap(model.latestSetResult)
+        XCTAssertEqual(setResult.prescription.loadLB, 25)
+        XCTAssertFalse(setResult.interrupted)
+        XCTAssertEqual(model.completedSetResults.count, 1)
+        let completedSummaryURL = model.summaryURL
+        let liveSample = raw(samples.count + 25)
+        provider.emit(.sample(RawMotionSample(
+            index: liveSample.index, sourceTimestamp: liveSample.sourceTimestamp,
+            receiptUptime: ProcessInfo.processInfo.systemUptime,
+            sensorLocation: liveSample.sensorLocation,
+            userAccelerationX: liveSample.userAccelerationX,
+            userAccelerationY: liveSample.userAccelerationY,
+            userAccelerationZ: liveSample.userAccelerationZ,
+            gravityX: liveSample.gravityX, gravityY: liveSample.gravityY, gravityZ: liveSample.gravityZ,
+            rotationRateX: liveSample.rotationRateX, rotationRateY: liveSample.rotationRateY,
+            rotationRateZ: liveSample.rotationRateZ,
+            quaternionW: liveSample.quaternionW, quaternionX: liveSample.quaternionX,
+            quaternionY: liveSample.quaternionY, quaternionZ: liveSample.quaternionZ,
+            roll: liveSample.roll, pitch: liveSample.pitch, yaw: liveSample.yaw)))
+        for _ in 0..<1000 {
+            if capture.latestSample?.index == liveSample.index { break }
+            await Task.yield()
+        }
+        await model.startSet(capture)
+        XCTAssertEqual(model.state, .preparing)
+        await model.cancelPreparation()
+        XCTAssertTrue(model.betweenSets)
+        XCTAssertEqual(model.latestSetResult?.id, setResult.id)
+        XCTAssertEqual(model.summaryURL, completedSummaryURL)
+        model.finishWorkout()
         let result = try XCTUnwrap(model.result)
-        XCTAssertEqual(result.prescription.loadLB, 25)
-        XCTAssertFalse(result.interrupted)
         let saved = try JSONDecoder().decode(WorkoutSetResult.self, from: Data(contentsOf: XCTUnwrap(model.summaryURL)))
         XCTAssertEqual(saved.reps, result.reps)
         XCTAssertEqual(saved.prescription, result.prescription)
         let profileURL = try XCTUnwrap(model.summaryURL).deletingLastPathComponent()
-            .appendingPathComponent("experimental-v6-profile.json")
+            .appendingPathComponent("experimental-v7-profile.json")
         let recordedProfile = try JSONDecoder().decode(V2DSPProfile.self, from: Data(contentsOf: profileURL))
         XCTAssertEqual(recordedProfile.profileID, V2DSPProfile.adaptiveCurlV6.profileID)
         XCTAssertEqual(recordedProfile.identity.algorithm, .adaptiveAxis)
@@ -129,7 +225,7 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertEqual(model.state, .preparing)
         await model.checkStaleness(now: ProcessInfo.processInfo.systemUptime + 1)
         XCTAssertEqual(model.state, .interrupted)
-        XCTAssertTrue(model.result?.interrupted == true)
+        XCTAssertTrue(model.latestSetResult?.interrupted == true)
         await capture.stopMotion()
     }
 
@@ -261,7 +357,7 @@ private final class TestWorkoutConsumer: WorkoutMotionConsumer {
 
 final class AutomaticSetBoundaryTests: XCTestCase {
     func testSuggestedRestNeverBlocksTheNextSet() {
-        var session = WorkoutSessionReducer(prescription: .init())
+        var session = automaticSession()
         session.apply(.rep(.init(id: "first", start: 0, end: 2)))
         session.apply(.clock(14))
         XCTAssertNil(session.current)
@@ -274,7 +370,7 @@ final class AutomaticSetBoundaryTests: XCTestCase {
     }
 
     func testSetEndsAtTwelveSecondsNotBeforeAndNoEmptySetsAppear() {
-        var session = WorkoutSessionReducer(prescription: .init())
+        var session = automaticSession()
         session.apply(.clock(50))
         XCTAssertTrue(session.sets.isEmpty)
         session.apply(.rep(.init(id: "one", start: 50, end: 52)))
@@ -289,7 +385,7 @@ final class AutomaticSetBoundaryTests: XCTestCase {
     }
 
     func testCompletedRepResetsTimerAndNextSetStartsWithoutButton() {
-        var session = WorkoutSessionReducer(prescription: .init())
+        var session = automaticSession()
         session.apply(.rep(.init(id: "one", start: 0, end: 2)))
         session.apply(.clock(10))
         session.apply(.rep(.init(id: "two", start: 10, end: 12)))
@@ -303,7 +399,7 @@ final class AutomaticSetBoundaryTests: XCTestCase {
     }
 
     func testDuplicatesInvalidRepsAndManualBoundaryDoNotResetOrInflateCount() {
-        var session = WorkoutSessionReducer(prescription: .init())
+        var session = automaticSession()
         let first = SessionRep(id: "one", start: 0, end: 2)
         session.apply(.rep(first))
         session.apply(.rep(first))
@@ -318,7 +414,7 @@ final class AutomaticSetBoundaryTests: XCTestCase {
 
     func testInterruptionAndReplayPreserveSetsAndFrozenInputs() throws {
         let original = WorkoutPrescription()
-        var session = WorkoutSessionReducer(prescription: original)
+        var session = automaticSession()
         session.apply(.rep(.init(id: "one", start: 0, end: 2)))
         var changed = original; changed.loadLB = 40
         session.apply(.selection(changed))
@@ -331,5 +427,12 @@ final class AutomaticSetBoundaryTests: XCTestCase {
             policy: session.policy, inputs: session.inputs, sets: session.sets, interrupted: true, recordingDirectory: nil)
         let saved = try JSONDecoder().decode(WorkoutSessionArchive.self, from: JSONEncoder().encode(archive))
         XCTAssertEqual(saved.replay().sets, session.sets)
+    }
+
+    private func automaticSession() -> WorkoutSessionReducer {
+        WorkoutSessionReducer(
+            prescription: .init(),
+            policy: .init(version: "automatic-sets-v1", inactivitySeconds: 12)
+        )
     }
 }

@@ -43,6 +43,8 @@ struct WorkoutView: View {
                         summary(result)
                     } else if workout.isRunning {
                         live
+                    } else if let setResult = workout.latestSetResult {
+                        betweenSets(setResult)
                     } else {
                         ready
                     }
@@ -86,10 +88,6 @@ struct WorkoutView: View {
                 return saved
             }
         }
-        .onChange(of: workout.pendingSetReviews) { _, reviews in
-            if reviewingSet == nil { reviewingSet = reviews.first }
-        }
-
     }
 
     private var header: some View {
@@ -101,14 +99,14 @@ struct WorkoutView: View {
                 }.buttonStyle(.plain)
                     .accessibilityLabel("Switch to developer interface")
                     .accessibilityIdentifier("interface-toggle")
-                if workout.isRunning {
-                    Text("Set \(workout.completedSets.count + 1)").font(.caption)
+                if workout.workoutStarted {
+                    Text("Set \(workout.completedSetResults.count + (workout.isRunning ? 1 : 0))").font(.caption)
                 }
-                if workout.isRunning { statusPill }
+                if workout.workoutStarted { statusPill }
             }
             Spacer(minLength: 8)
             HStack(spacing: 8) {
-                if workout.isRunning {
+                if workout.workoutStarted {
                     Text(clock(workout.elapsedTime)).font(.system(.subheadline, design: .monospaced).weight(.semibold))
                         .padding(.horizontal, 12).padding(.vertical, 7).glass(radius: 14)
                         .accessibilityLabel("Workout elapsed time \(clock(workout.elapsedTime))")
@@ -121,7 +119,7 @@ struct WorkoutView: View {
                 }.accessibilityLabel("Workout notebook")
                     .accessibilityIdentifier("workout-notebook")
             }
-            if !workout.isRunning {
+            if !workout.workoutStarted {
                 Button { showingSupport = true } label: {
                     Image(systemName: "questionmark.circle").font(.title3).frame(minWidth: 32, minHeight: 32)
                 }.accessibilityLabel("Support")
@@ -151,50 +149,59 @@ struct WorkoutView: View {
     private var live: some View {
         VStack(spacing: 26) {
             Spacer(minLength: 20)
-            Text(workout.activePrescription.exercise.rawValue.uppercased())
-                .font(.system(size: 18, weight: .semibold)).tracking(2.2).multilineTextAlignment(.center)
+            VStack(spacing: 5) {
+                Text(workout.activePrescription.exercise.rawValue.uppercased())
+                    .font(.system(size: 18, weight: .semibold)).tracking(2.2)
+                Text("\(workout.activePrescription.loadLB.formatted()) lb · target \(workout.activePrescription.minimumReps)–\(workout.activePrescription.maximumReps)")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }.multilineTextAlignment(.center)
             LiftHalo(reps: workout.reps, connected: signalLive).frame(maxWidth: 310).padding(.horizontal, 8)
             VStack(spacing: 8) {
                 if workout.state == .preparing {
-                    Text("Hold still at the starting position.")
-                    Text("Preparing the sensor · at least 3 seconds").font(.footnote)
+                    Text("Hold weight still…").font(.headline).foregroundStyle(.primary)
+                    Text("Preparing the sensor").font(.footnote)
                 } else if workout.state == .finalizing {
-                    Text("Finishing your recording…")
-                } else if let remaining = workout.timeoutRemaining {
-                    if let pace = workout.currentPace {
-                        Text("Average pace: \(pace.formatted(.number.precision(.fractionLength(1)))) seconds")
-                    }
-                    Text("Set ends in \(Int(ceil(remaining)))s without another rep").font(.footnote)
+                    Text("Finalizing measurements…").font(.headline).foregroundStyle(.primary)
+                } else if workout.reps == 0 {
+                    Text("Ready — begin lifting").font(.headline).foregroundStyle(.primary)
                 } else {
-                    Text(workout.completedSets.isEmpty ? "Your first complete rep starts the set." : "Set complete. Ready for your next set.")
-                    if let rest = workout.restStart {
-                        HStack(spacing: 8) {
-                            Text("Rest · \(clock(workout.sourceTime - rest))")
-                            if let recommendation = workout.restRecommendation {
-                                Text("Suggested \(clock(Double(recommendation.seconds)))")
-                                    .fontWeight(.semibold).foregroundStyle(LiftStyle.blue)
-                                    .padding(.horizontal, 9).padding(.vertical, 5)
-                                    .background(LiftStyle.blue.opacity(0.11), in: Capsule())
-                            } else if !workout.pendingSetReviews.isEmpty {
-                                Text("Confirm RIR for rest target").font(.footnote)
-                            }
-                        }.monospacedDigit()
-                    }
+                    Text(workout.coaching.state.title.uppercased())
+                        .font(.system(size: 22, weight: .semibold)).tracking(1.2).foregroundStyle(.primary)
+                        .accessibilityIdentifier("workout-coaching-state")
+                    Text(workout.coaching.explanation).font(.subheadline)
+                        .accessibilityIdentifier("workout-coaching-reason")
                 }
             }.font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            if workout.session?.current == nil && workout.state == .active {
-                Button("Adjust next set") { showingSetup = true }.font(.subheadline)
-            }
-            if let pending = workout.pendingSetReviews.first {
-                Button("Review completed set") { reviewingSet = pending }
-                    .font(.subheadline.weight(.semibold))
-            }
-            if let last = workout.completedSets.last {
-                Text("Last set · \(last.reps.count) reps · \(last.prescription.loadLB.formatted()) lb")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
             Spacer(minLength: 12)
         }
+    }
+
+    private func betweenSets(_ set: WorkoutSetResult) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            Spacer(minLength: 18)
+            VStack(alignment: .leading, spacing: 9) {
+                Text(set.interrupted ? "SET INTERRUPTED" : "SET \(workout.completedSetResults.count) COMPLETE")
+                    .font(.system(size: 14, weight: .semibold)).tracking(1.8).foregroundStyle(.secondary)
+                Text("\(set.reps) reps")
+                    .font(.system(size: 38, weight: .semibold)).tracking(-1)
+                if let slowdown = set.slowdownPercent {
+                    Text("\(Int(slowdown.rounded()))% slower than baseline")
+                        .font(.system(size: 17)).foregroundStyle(.secondary)
+                }
+                Text(set.targetDescription).font(.subheadline).foregroundStyle(.secondary)
+            }.accessibilityIdentifier("set-result")
+            if let plan = set.nextSetPlan {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("NEXT SET").font(.caption.weight(.semibold)).tracking(1.6).foregroundStyle(.secondary)
+                    Text(plan.title).font(.system(size: 24, weight: .semibold))
+                    Text(plan.explanation).font(.subheadline).foregroundStyle(.secondary)
+                }.padding(22).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 24)
+                    .accessibilityIdentifier("next-set-plan")
+            }
+            Label("Rest · \(clock(max(0, now - (workout.restStart ?? now))))", systemImage: "timer")
+                .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func summary(_ result: WorkoutSetResult) -> some View {
@@ -202,26 +209,31 @@ struct WorkoutView: View {
             VStack(alignment: .leading, spacing: 9) {
                 Text(result.interrupted ? "Workout interrupted" : "Workout complete")
                     .font(.system(size: 32, weight: .semibold)).tracking(-1)
-                Text("\(result.reps) reps · \(workout.completedSets.count) sets · \(clock(workout.elapsedTime))")
+                Text("\(result.reps) reps · \(workout.completedSetResults.count) sets · \(clock(workout.elapsedTime))")
                     .font(.system(size: 17)).foregroundStyle(.secondary).monospacedDigit()
             }.padding(.top, 20)
             VStack(alignment: .leading, spacing: 0) {
-                if workout.completedSets.isEmpty { Text("No complete reps recorded.").foregroundStyle(.secondary) }
-                ForEach(Array(workout.completedSets.enumerated()), id: \.element.id) { index, set in
+                if workout.completedSetResults.isEmpty { Text("No complete reps recorded.").foregroundStyle(.secondary) }
+                ForEach(Array(workout.completedSetResults.enumerated()), id: \.element.id) { index, set in
                     HStack(alignment: .top, spacing: 20) {
                         VStack(spacing: 0) {
                             Circle().fill(LiftStyle.blue).frame(width: 10, height: 10).padding(.top, 6)
                             Rectangle().fill(LiftStyle.blue.opacity(0.25)).frame(width: 1.5)
-                                .opacity(index == workout.completedSets.count - 1 ? 0 : 1)
+                                .opacity(index == workout.completedSetResults.count - 1 ? 0 : 1)
                         }.frame(width: 11)
                         VStack(alignment: .leading, spacing: 5) {
                             Text("\(index + 1). \(set.prescription.exercise.rawValue)")
                                 .font(.system(size: 19, weight: .medium))
-                            Text("\(set.reps.count) reps · \(set.averageDuration.formatted(.number.precision(.fractionLength(1)))) sec average")
+                            Text("\(set.reps) reps · \(set.prescription.loadLB.formatted()) lb")
                                 .font(.system(size: 15)).foregroundStyle(.secondary)
-                            Text("\(set.prescription.loadLB.formatted()) lb · target \(set.prescription.minimumReps)–\(set.prescription.maximumReps)\(set.interrupted ? " · interrupted" : "")")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }.padding(.bottom, index == workout.completedSets.count - 1 ? 0 : 24)
+                            if let slowdown = set.slowdownPercent {
+                                Text("\(Int(slowdown.rounded()))% slower than baseline")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let plan = set.nextSetPlan {
+                                Text(plan.title).font(.caption.weight(.semibold)).foregroundStyle(LiftStyle.blue)
+                            }
+                        }.padding(.bottom, index == workout.completedSetResults.count - 1 ? 0 : 24)
                     }.fixedSize(horizontal: false, vertical: true)
                 }
             }.padding(22).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 26)
@@ -230,9 +242,6 @@ struct WorkoutView: View {
                 Divider()
                 metric("Average pace", result.averageRepDuration.map { "\($0.formatted(.number.precision(.fractionLength(1)))) sec per rep" } ?? "—")
             }.padding(22).glass(radius: 24)
-            if let url = workout.sessionURL {
-                ShareLink(item: url) { Label("Share workout", systemImage: "square.and.arrow.up") }.font(.subheadline)
-            }
             if let pending = workout.pendingSetReviews.first {
                 Button("Review \(workout.pendingSetReviews.count) unconfirmed set\(workout.pendingSetReviews.count == 1 ? "" : "s")") {
                     reviewingSet = pending
@@ -245,23 +254,41 @@ struct WorkoutView: View {
         if workout.result != nil {
             Button("Done") { workout.reset() }.buttonStyle(LiftPrimaryStyle())
         } else if workout.isRunning {
-            HStack(spacing: 10) {
-                Button(workout.state == .preparing ? "Cancel" : "End set") {
-                    if workout.state == .preparing { Task { await workout.cancelPreparation() } }
-                    else { workout.endSet() }
-                }.buttonStyle(LiftPrimaryStyle(secondary: true))
-                    .disabled(workout.busy || workout.state == .finalizing || (workout.state == .active && workout.session?.current == nil))
-                Button(workout.state == .finalizing ? "Finishing…" : "Finish") { Task { await workout.end() } }
-                    .buttonStyle(LiftPrimaryStyle()).disabled(workout.state != .active || workout.busy)
-            }.padding(8).glass(radius: 26)
+            if workout.state == .preparing {
+                Button("Cancel") { Task { await workout.cancelPreparation() } }
+                    .buttonStyle(LiftPrimaryStyle(secondary: true)).disabled(workout.busy)
+            } else if workout.state == .finalizing {
+                Button("Finalizing…") { }.buttonStyle(LiftPrimaryStyle()).disabled(true)
+            } else {
+                Button("End Set") { Task { await workout.endSet() } }
+                    .buttonStyle(LiftPrimaryStyle()).disabled(workout.busy)
+                    .accessibilityIdentifier("end-set")
+            }
+        } else if workout.latestSetResult != nil {
+            VStack(spacing: 10) {
+                if workout.state != .interrupted {
+                    Button("Start Next Set") { Task { await workout.startSet(capture) } }
+                        .buttonStyle(LiftPrimaryStyle()).accessibilityIdentifier("start-next-set")
+                        .disabled(!signalLive || capture.recordingActive)
+                }
+                HStack(spacing: 10) {
+                    if workout.state != .interrupted {
+                        Button("Adjust Next Set") { showingSetup = true }
+                            .buttonStyle(LiftPrimaryStyle(secondary: true))
+                    }
+                    Button("Finish Workout") { workout.finishWorkout() }
+                        .buttonStyle(LiftPrimaryStyle(secondary: true))
+                        .accessibilityIdentifier("finish-workout")
+                }
+            }
         } else {
             Button(primaryLabel) {
                 if !capture.monitoringActive { capture.startMotion() }
                 else if !workout.mountConfirmed || !workout.prescription.isValid || !workout.supportedExercise { showingSetup = true }
-                else { Task { await workout.start(capture) } }
+                else { Task { await workout.startSet(capture) } }
             }.buttonStyle(LiftPrimaryStyle())
                 .disabled(capture.monitoringActive && !needsSetup && (!signalLive || capture.recordingActive))
-                .accessibilityIdentifier("start-workout")
+                .accessibilityIdentifier("start-set")
         }
     }
 
@@ -270,12 +297,9 @@ struct WorkoutView: View {
             Form {
                 Section("Workout") {
                     Picker("Exercise", selection: $workout.prescription.exercise) {
-                        ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
+                        ForEach([V2Exercise.bicepsCurl, .lateralRaise]) { Text($0.rawValue).tag($0) }
                     }.disabled(workout.isRunning)
                     if !workout.supportedExercise { Text("This exercise profile is not available yet.").foregroundStyle(.secondary) }
-                    Picker("Goal", selection: $workout.prescription.goal) {
-                        ForEach(TrainingGoal.allCases) { Text($0.rawValue).tag($0) }
-                    }
                     HStack {
                         Text("Load (lb)")
                         TextField("Load", value: $workout.prescription.loadLB, format: .number)
@@ -284,35 +308,22 @@ struct WorkoutView: View {
                     Stepper("Minimum reps: \(workout.prescription.minimumReps)", value: $workout.prescription.minimumReps, in: 1...workout.prescription.maximumReps)
                     Stepper("Maximum reps: \(workout.prescription.maximumReps)", value: $workout.prescription.maximumReps, in: workout.prescription.minimumReps...100)
                 }
-                if !workout.isRunning {
+                if workout.session == nil {
                     Section("Mount") {
                         Toggle("Right AirPod and mount confirmed", isOn: $workout.mountConfirmed)
-                        Text("Use the tested curl mounting orientation. Exercise selection is manual.").font(.footnote)
+                        Text("Use the tested right-AirPod mounting orientation. Exercise selection is manual.").font(.footnote)
                     }
                     Section { Button("Open diagnostics") { diagnosticsPending = true; showingSetup = false } }
                 }
                 Section {
-                    Text("Sets end after 12 seconds without a completed rep. Goals and targets are recorded only.")
+                    Text("Start and end each set explicitly. Changes made between sets apply to the next set.")
                     if !workout.prescription.isValid { Text("Enter a load from 0 to 1,000 lb and a valid rep range.").foregroundStyle(.orange) }
                 }.font(.footnote)
-                if let prediction = workout.loadPrediction() {
-                    Section("Load estimate") {
-                        Text("\(prediction.source.loadLB.formatted()) lb × \(prediction.source.reps)" +
-                             (prediction.source.repsInReserve.map { " @ \($0) RIR" } ?? ""))
-                        Button("Use estimated \(prediction.loadLB.formatted()) lb") {
-                            workout.prescription.loadLB = prediction.loadLB
-                        }
-                        Text("\(prediction.confidence.rawValue) from \(prediction.sourceCount) confirmed " +
-                             (prediction.sourceCount == 1 ? "set" : "sets") +
-                             ". Uses a public-data load curve with reps + RIR. Always verify the load.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
             }
             .navigationTitle("Workout setup").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) {
                 Button("Done") {
-                    if workout.isRunning { workout.updateNextSet() }
+                    if workout.session != nil { workout.updateNextSet() }
                     showingSetup = false
                 }.disabled(!workout.prescription.isValid || !workout.supportedExercise)
             } }
@@ -347,7 +358,7 @@ struct WorkoutView: View {
         if capture.recordingActive { return "Stop raw recording in diagnostics to begin." }
         if !capture.monitoringActive { return "Connect your AirPod to begin." }
         if liveSensor == .leftHeadphone {
-            return "Motion is coming from the left AirPod. This curl profile needs the right AirPod. Put the left AirPod in its case, then reconnect motion."
+            return "Motion is coming from the left AirPod. The selected profile needs the right AirPod. Put the left AirPod in its case, then reconnect motion."
         }
         if let sensor = liveSensor, sensor != .rightHeadphone {
             return "Motion is arriving, but iOS has not identified the AirPod side. Reconnect the right AirPod."
@@ -356,7 +367,7 @@ struct WorkoutView: View {
         return workout.mountConfirmed ? "Secure the AirPod in the mount." : "Confirm your mount in workout setup."
     }
     private var primaryLabel: String {
-        !capture.monitoringActive ? "Connect AirPod" : (needsSetup ? "Review setup" : "Start workout")
+        !capture.monitoringActive ? "Connect AirPod" : (needsSetup ? "Review setup" : "Start First Set")
     }
     private var statusPill: some View {
         HStack(spacing: 7) {
@@ -543,7 +554,7 @@ private struct LiftSupportView: View {
     private let topics: [(String, String, String)] = [
         ("AirPod won’t connect", "airpodspro", "Pair the AirPods with this iPhone, then tap Connect AirPod. LiftPod requires live motion from the right AirPod. Check Motion & Fitness permission in Settings."),
         ("Mount and fit", "dumbbell.fill", "Secure the right AirPod in the tested curl orientation and confirm the mount in Workout setup. For outside-ear testing, disable Automatic Ear Detection in iOS Settings."),
-        ("How sets end", "timer", "The first complete rep starts a set. Twelve seconds without another completed rep ends it. The next complete rep starts a new set. End set remains available as a manual control."),
+        ("How sets work", "timer", "Start each set when the weight is still. LiftPod prepares the sensor, then counts only complete reps. Tap End Set when you finish; your exercise, load, and target carry into the next set."),
         ("Reps stopped counting", "waveform.path.ecg", "Check the live motion status and mounting orientation. An interrupted workout retains confirmed reps. Finish or return to setup, reconnect, and start a new workout. Diagnostics shows raw motion and the experimental signal lab.")
     ]
     var body: some View {

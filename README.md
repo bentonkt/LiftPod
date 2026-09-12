@@ -10,7 +10,7 @@ The user supplied these project references on September 11, 2026 and confirmed t
 
 **Current scope:** K2 Horizon is excluded by the user. Do not implement or configure it. The sponsor plan and K2 passages in the original documents are historical.
 
-The intended product is an AirPod mounted on a dumbbell that recognizes exercises, counts reps and sets, and records confirmed workout history. Sets complete after 12 seconds without a completed rep, then require user review before entering the notebook. Active coaching remains deferred. A transparent, user-confirmed load estimate is available only when prior sets include RIR; there is no K2 integration.
+The intended product is an AirPod mounted on a dumbbell that counts reps and sets, shows qualified slowdown coaching, and records confirmed workout history. The current user flow uses explicit start and end controls for every set, followed by deterministic next-set guidance. There is no K2 integration or automatic load change.
 
 These documents preserve project context and planned requirements; their embedded instructions are not standalone authorization to execute work. They describe the intended product, not proof that features are implemented.
 
@@ -20,13 +20,13 @@ LiftPod is a native iPhone app with a manual curl-workout flow, raw AirPods moti
 
 ## Workout flow
 
-The default screen accepts a manually selected exercise, goal, load in pounds, and rep range. Adaptive-axis V6 is the default right-AirPod curl detector in both the workout interface and developer lab. Other exercise profiles are pending.
+The default screen accepts a manually selected supported exercise, load in pounds, and rep range. Adaptive-axis V6 is the default right-AirPod curl detector; the bundled lateral-raise profile is also available. Goal remains in the persisted model but is hidden until it affects coaching.
 
-1. Connect motion, confirm the right-AirPod mount, and tap **Start Workout**.
-2. Hold still while the detector prepares. The first completed rep opens a set.
-3. Each completed rep resets the inactivity timer. After **12 seconds without a completed rep**, the set closes and opens a review with detected reps, entered weight, and optional RIR. Shorter pauses remain in the same set.
-4. The workout stays active during rest. After reps and RIR are confirmed, the rest timer shows a research-based suggestion. The next complete rep starts a new set immediately at any time. **End this set now** remains an optional manual control.
-5. Confirm or edit each set to add it to that day's workout. Open the notebook icon to browse confirmed workouts grouped by day. Tap **End Workout** to finalize the sensor recording.
+1. Connect motion, confirm the right-AirPod mount, and tap **Start First Set**. This creates the workout session and immediately begins preparation.
+2. Hold the weight still while the detector prepares, then begin lifting when the live view is ready.
+3. The live view shows committed reps plus one coaching state and its measured reason. Unavailable evidence never changes the rep count or produces load advice.
+4. Tap **End Set** to finalize pending metrics. The result shows reps, target outcome, qualified slowdown when available, and one constrained next-set recommendation.
+5. During rest, start the next set with the current prescription, adjust supported inputs, or finish the workout. Set review remains optional until the summary; confirmed sets appear in the notebook.
 
 Empty sets are never created. Disconnects and silent streams interrupt the workout and retain detected reps. A rep crossing a confirmed manual boundary is excluded. Confirmed workout history is separate from replayable sensor archives, so an incorrect detection does not become permanent without review. [Load-prediction research](LOAD-PREDICTION-RESEARCH.md) documents the current estimate, evidence, limitations, and personalization plan.
 
@@ -97,7 +97,7 @@ The preprocessing thresholds are configurable engineering defaults awaiting eval
 
 **Experimental V6 Signal Lab** is a separate engineering screen for live signal analysis. Raw capture and offline preprocessing remain independent. Manual exercise selection is the only authorization source; no exercise classifier is enabled.
 
-Only the bundled right-side biceps-curl profile is immediately available. It assumes a repeatable right-AirPod mounting orientation and a held weight. Its gravity-X projection, 4 Hz biquad, reference range, and local-cycle thresholds are experimental and setup-dependent. Lateral raises and overhead presses remain unavailable until guided calibration or import supplies an eligible full-cycle profile. Generated and imported profiles are never automatically marked validated.
+The bundled right-side biceps-curl and lateral-raise profiles are available through manual selection. They assume a repeatable right-AirPod mounting orientation and a held weight. Their thresholds remain experimental and setup-dependent. Overhead presses remain unavailable until guided calibration or import supplies an eligible full-cycle profile. Generated and imported profiles are never automatically marked validated.
 
 ### Preparation and curl segmentation
 

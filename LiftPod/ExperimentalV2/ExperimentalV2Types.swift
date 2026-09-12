@@ -13,6 +13,8 @@ enum V6Algorithm: String, Codable, CaseIterable, Sendable {
     case qualifiedLocalCycle = "qualified-local-cycle-v4"
     case fixedAxisAngular = "fixed-axis-angular-v5"
     case adaptiveAxis = "adaptive-axis-v6"
+    case adaptiveAxisV7 = "adaptive-axis-v7"
+    case gravityTilt = "gravity-tilt-v1"
 }
 enum V2ValidationStatus: String, Codable, Sendable { case experimental, importedUnvalidated, generatedUnvalidated, validated }
 enum V2AuthorizationSource: String, Codable, Sendable { case manual }
@@ -29,6 +31,14 @@ enum V2RejectionReason: String, Codable, Sendable {
     case invalidOrdering, invalidDuration, excessivePause, discontinuity, ambiguousTemplate
     case templateCost, negativeMargin, endpointMismatch, phaseEvidence, nonFiniteEvidence
     case ambiguousReversal, angularReferenceAmbiguous, insufficientAxisEnergy, outsideActiveSet
+    case inconsistentDirection
+}
+
+struct V6GravityTiltConfiguration: Codable, Sendable, Equatable {
+    var maximumDirectionDifference = 0.20
+    var minimumDirectionDisplacement = 0.10
+    var directionApexFraction = 0.80
+    var maximumPreparationVariation = 0.12
 }
 
 struct V6AngularConfiguration: Codable, Sendable, Equatable {
@@ -162,6 +172,7 @@ struct V2DSPIdentity: Codable, Sendable, Equatable {
     var algorithm: V6Algorithm = .qualifiedLocalCycle
     var angular: V6AngularConfiguration? = nil
     var adaptiveAxis: V6AdaptiveAxisConfiguration? = nil
+    var gravityTilt: V6GravityTiltConfiguration? = nil
 }
 
 struct V2DSPProfile: Codable, Sendable, Equatable, Identifiable {
@@ -198,7 +209,7 @@ struct V2DSPProfile: Codable, Sendable, Equatable, Identifiable {
               i.templateConfiguration.warpingBandFraction <= 0.20 else {
             throw V2Error.invalidProfile("DSP configuration is internally inconsistent")
         }
-        if i.algorithm == .fixedAxisAngular || i.algorithm == .adaptiveAxis {
+        if i.algorithm == .fixedAxisAngular || i.algorithm == .adaptiveAxis || i.algorithm == .adaptiveAxisV7 {
             guard let angular = i.angular,
                   angular.minimumPlanarMagnitude >= 0.1, angular.minimumPlanarMagnitude <= 0.9,
                   angular.maximumSampleDelta > 0, angular.maximumSampleDelta < .pi,
@@ -206,7 +217,7 @@ struct V2DSPProfile: Codable, Sendable, Equatable, Identifiable {
                 throw V2Error.invalidProfile("Angular configuration is invalid")
             }
         }
-        if i.algorithm == .adaptiveAxis {
+        if i.algorithm == .adaptiveAxis || i.algorithm == .adaptiveAxisV7 {
             guard let adaptive = i.adaptiveAxis,
                   adaptive.movementRate > 0,
                   adaptive.minimumDuration >= 0.12,
@@ -229,6 +240,15 @@ struct V2DSPProfile: Codable, Sendable, Equatable, Identifiable {
             _ = try i.positiveTemplates.map { try $0.validated(configuration: i.templateConfiguration) }
             _ = try i.negativeTemplates.map { try $0.validated(configuration: i.templateConfiguration) }
         }
+        if i.algorithm == .gravityTilt {
+            guard i.profileVersion == "experimental-v6", i.kind == .localCycle, let tilt = i.gravityTilt,
+                  tilt.maximumDirectionDifference.isFinite, (0.01...0.5).contains(tilt.maximumDirectionDifference),
+                  tilt.minimumDirectionDisplacement.isFinite, (0.01...0.3).contains(tilt.minimumDirectionDisplacement),
+                  tilt.directionApexFraction.isFinite, (0.5...1).contains(tilt.directionApexFraction),
+                  tilt.maximumPreparationVariation.isFinite, (0.01...0.3).contains(tilt.maximumPreparationVariation) else {
+                throw V2Error.invalidProfile("Invalid gravity-tilt configuration")
+            }
+        } else if i.gravityTilt != nil { throw V2Error.invalidProfile("Unexpected gravity-tilt configuration") }
         return self
     }
 
@@ -288,6 +308,23 @@ struct V2DSPProfile: Codable, Sendable, Equatable, Identifiable {
         )
         return profile
     }
+
+    static var adaptiveCurlV7: V2DSPProfile {
+        let v6 = adaptiveCurlV6
+        return V2DSPProfile(
+            profileID: "experimental-adaptive-curl-v7",
+            identity: V2DSPIdentity(
+                profileVersion: "experimental-v6", exercise: .bicepsCurl, expectedSensorSide: .right,
+                setupIdentifier: v6.identity.setupIdentifier, sampleRate: v6.identity.sampleRate,
+                signalSource: v6.identity.signalSource, projectionAxis: v6.identity.projectionAxis,
+                polarity: v6.identity.polarity, filter: v6.identity.filter, reference: v6.identity.reference,
+                localCycle: v6.identity.localCycle, templateConfiguration: v6.identity.templateConfiguration,
+                timing: v6.identity.timing, positiveTemplates: [], negativeTemplates: [], kind: .localCycle,
+                algorithm: .adaptiveAxisV7, angular: v6.identity.angular, adaptiveAxis: v6.identity.adaptiveAxis
+            ), validationStatus: .experimental,
+            descriptiveNotes: "Experimental adaptive-axis curls with continuous-repetition successor recovery."
+        )
+    }
 }
 
 struct V2SetDescriptor: Codable, Sendable, Equatable {
@@ -339,6 +376,36 @@ struct V2CycleEvidence: Codable, Sendable, Equatable, Identifiable {
     var rejectionReason: V2RejectionReason?
     var movementAxis: ExperimentalVector3? = nil
     var axisEnergyFraction: Double? = nil
+}
+
+enum V2BoundaryKind: String, Codable, Sendable {
+    case stationary
+    case continuousReversal
+}
+
+enum V2BoundaryDirection: String, Codable, Sendable {
+    case stationary
+    case loweringToLifting
+}
+
+/// Detector-owned motion evidence. Velocity estimation and acceptance remain
+/// downstream concerns so metrics cannot influence counting or authorization.
+struct V2BoundaryEvidence: Codable, Sendable, Equatable, Identifiable {
+    let boundaryID: String
+    let sourceSegmentID: String
+    let observedTimestamp: Double
+    let confirmedTimestamp: Double
+    let kind: V2BoundaryKind
+    var associatedCandidateIDs: [String]
+    let endpointStartTimestamp: Double
+    let endpointEndTimestamp: Double
+    let returnedTimestamp: Double?
+    let direction: V2BoundaryDirection
+    /// Optional world-frame direction in which a reversal supports near-zero
+    /// velocity. Nil is not evidence that all three components are zero.
+    var reversalNormalWorld: ExperimentalVector3? = nil
+
+    var id: String { boundaryID }
 }
 
 struct V6Diagnostics: Codable, Sendable, Equatable {
