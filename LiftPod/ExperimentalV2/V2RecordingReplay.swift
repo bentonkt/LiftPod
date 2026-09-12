@@ -143,24 +143,28 @@ actor V2SessionRecorder: V2RecordingSink {
                   reference: V2ReferenceMeasurements?) throws -> V2SessionBundleURLs? {
         if let finalized { return finalized }
         guard let descriptor, let profile else { return nil }
-        let end = V2ProcessorTransaction(schemaVersion: 2, processorVersion: "rep-analysis-v2",
+        let isV6 = profile.identity.profileVersion == "experimental-v6"
+        let schema = isV6 ? 6 : 2
+        let processor = isV6 ? "rep-analysis-v6" : "rep-analysis-v2"
+        let end = V2ProcessorTransaction(schemaVersion: schema, processorVersion: processor,
                                          ingestSequence: transactions.count, boundary: .end, input: nil,
                                          output: snapshot, uniformSamples: [], profileID: profile.profileID,
                                          profileHash: profile.contentHash)
         transactions.append(end)
-        let folder = root.appendingPathComponent("experimental-v2-\(descriptor.setID.uuidString)", isDirectory: true)
+        let prefix = isV6 ? "experimental-v6" : "experimental-v2"
+        let folder = root.appendingPathComponent("\(prefix)-\(descriptor.setID.uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let urls = V2SessionBundleURLs(
             directory: folder, rawCSV: folder.appendingPathComponent("raw-motion.csv"),
             transactions: folder.appendingPathComponent("processor-transactions.jsonl"),
             metadata: folder.appendingPathComponent("metadata.json"),
             summary: folder.appendingPathComponent("summary.json"),
-            manifest: folder.appendingPathComponent("v2-analysis-manifest.json"),
-            profile: folder.appendingPathComponent("experimental-v2-profile.json")
+            manifest: folder.appendingPathComponent("\(isV6 ? "v6" : "v2")-analysis-manifest.json"),
+            profile: folder.appendingPathComponent("\(prefix)-profile.json")
         )
         let clockOffset = raw.first.map { $0.receiptUptime - $0.sourceTimestamp }
         let manifest = V2AnalysisManifest(
-            schemaVersion: 2, completionState: state, failureReason: failure, descriptor: descriptor,
+            schemaVersion: schema, completionState: state, failureReason: failure, descriptor: descriptor,
             exercise: descriptor.exercise, scenarioLabel: descriptor.hardwareSetupIdentifier,
             profiles: [profile], dspHashes: [profile.contentHash], processingConfiguration: profile.identity,
             sourceToReceiptClockOffset: clockOffset, transactionCount: transactions.count,
@@ -168,10 +172,10 @@ actor V2SessionRecorder: V2RecordingSink {
             processingP95: 0, maximumRecordingQueueLag: 0,
             referenceMeasurements: reference, syncMarkers: markers
         )
-        let summary = V2SessionSummary(schemaVersion: 2, processorVersion: "rep-analysis-v2",
+        let summary = V2SessionSummary(schemaVersion: schema, processorVersion: processor,
                                        descriptor: descriptor, state: state,
                                        committedCount: snapshot.committedCount, candidates: snapshot.recentEvents)
-        let metadata = V2SessionMetadata(schemaVersion: 2, setID: descriptor.setID, createdUTC: Date())
+        let metadata = V2SessionMetadata(schemaVersion: schema, setID: descriptor.setID, createdUTC: Date())
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
         let lineEncoder = JSONEncoder(); lineEncoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let csv = ([CSVRecorder.header] + raw.map(CSVRecorder.row(for:))).joined(separator: "\n") + "\n"
@@ -203,10 +207,11 @@ struct V2ReplayArchive: Sendable {
 
     static func load(from directory: URL) throws -> Self {
         let decoder = JSONDecoder()
+        let isV6 = FileManager.default.fileExists(atPath: directory.appendingPathComponent("v6-analysis-manifest.json").path)
         let manifest = try decoder.decode(V2AnalysisManifest.self,
-            from: Data(contentsOf: directory.appendingPathComponent("v2-analysis-manifest.json")))
+            from: Data(contentsOf: directory.appendingPathComponent(isV6 ? "v6-analysis-manifest.json" : "v2-analysis-manifest.json")))
         let profile = try decoder.decode(V2DSPProfile.self,
-            from: Data(contentsOf: directory.appendingPathComponent("experimental-v2-profile.json")))
+            from: Data(contentsOf: directory.appendingPathComponent(isV6 ? "experimental-v6-profile.json" : "experimental-v2-profile.json")))
         let data = try Data(contentsOf: directory.appendingPathComponent("processor-transactions.jsonl"))
         let transactions = try data.split(separator: 0x0A).map {
             try decoder.decode(V2ProcessorTransaction.self, from: Data($0))
@@ -224,7 +229,7 @@ struct V2ReplayResult: Sendable, Equatable {
 struct V2ReplayVerifier: Sendable {
     func verify(_ archive: V2ReplayArchive) -> V2ReplayResult {
         let manifest = archive.manifest
-        guard manifest.schemaVersion == 2 else { return fail(nil, "schemaVersion") }
+        guard [2, 6].contains(manifest.schemaVersion) else { return fail(nil, "schemaVersion") }
         guard manifest.completionState == .complete else { return fail(nil, "completionState") }
         guard manifest.rawSampleCount > 0, manifest.transactionCount > 0 else { return fail(nil, "nonempty recording") }
         guard manifest.transactionCount == archive.transactions.count else { return fail(nil, "transactionCount") }
@@ -242,9 +247,11 @@ struct V2ReplayVerifier: Sendable {
               manifest.processingConfiguration == valid.identity else { return fail(nil, "profileHash") }
         var raw: [RawMotionSample] = []
         var uniformCount = 0
+        let expectedSchema = valid.identity.profileVersion == "experimental-v6" ? 6 : 2
+        let expectedProcessor = expectedSchema == 6 ? "rep-analysis-v6" : "rep-analysis-v2"
         for transaction in archive.transactions {
-            guard transaction.schemaVersion == 2,
-                  transaction.processorVersion == "rep-analysis-v2",
+            guard transaction.schemaVersion == expectedSchema,
+                  transaction.processorVersion == expectedProcessor,
                   transaction.profileID == valid.profileID,
                   transaction.profileHash == valid.contentHash else {
                 return fail(transaction.ingestSequence, "profileVersion")

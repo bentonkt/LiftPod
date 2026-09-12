@@ -10,6 +10,7 @@ struct V2ProcessorSnapshot: Codable, Sendable, Equatable {
     let filteredSignal: Double?
     let landmarks: V2CycleLandmarks
     let recentEvents: [V2CycleEvidence]
+    var v6Diagnostics: V6Diagnostics? = nil
 }
 
 protocol V2RecordingSink: Sendable {
@@ -35,9 +36,11 @@ actor V2SetEngine {
     private var rawSamples: [RawMotionSample] = []
     private var processedUniformCount = 0
     private var referenceAcquirer = V2ReferenceAcquirer()
+    private var v6ReferenceAcquirer = V6ReferenceAcquirer()
     private var filter = ScalarBiquadFilter()
     private var segmenter: V2LocalCycleSegmenter?
     private var templateSegmenter: V2TemplateCycleSegmenter?
+    private var v6Detector: V6CurlDetector?
     private var preparationStart: Double?
     private var activationTimestamp: Double?
     private var endRequestTimestamp: Double?
@@ -61,12 +64,14 @@ actor V2SetEngine {
                                          hardwareSetupIdentifier: frozen.identity.setupIdentifier)
         try await recorder.start(descriptor: descriptor, profile: frozen)
         self.profile = frozen; self.descriptor = descriptor; self.recorder = recorder
-        rawSamples = []; processedUniformCount = 0; referenceAcquirer.reset()
+        rawSamples = []; processedUniformCount = 0; referenceAcquirer.reset(); v6ReferenceAcquirer.reset()
         filter = ScalarBiquadFilter(coefficients: frozen.identity.filter)
-        segmenter = frozen.identity.kind == .localCycle
+        let usesV6 = frozen.identity.profileVersion == "experimental-v6"
+        segmenter = !usesV6 && frozen.identity.kind == .localCycle
             ? V2LocalCycleSegmenter(profile: frozen, setDescriptor: descriptor) : nil
-        templateSegmenter = frozen.identity.kind == .fullCycleTemplate
+        templateSegmenter = !usesV6 && frozen.identity.kind == .fullCycleTemplate
             ? V2TemplateCycleSegmenter(profile: frozen, setDescriptor: descriptor) : nil
+        v6Detector = usesV6 ? V6CurlDetector(profile: frozen, descriptor: descriptor) : nil
         preparationStart = nil; activationTimestamp = nil; endRequestTimestamp = nil
         previousReceipt = nil; ingestSequence = 0; quality = .warmingUp; interruption = nil; completedBundle = nil
         state = .preparing
@@ -101,8 +106,9 @@ actor V2SetEngine {
         processedUniformCount = result.samples.count
         for uniform in newSamples { process(uniform, profile: profile) }
         updateSnapshot(filtered: snapshot.filteredSignal)
+        let isV6 = profile.identity.profileVersion == "experimental-v6"
         let transaction = V2ProcessorTransaction(
-            schemaVersion: 2, processorVersion: "rep-analysis-v2", ingestSequence: ingestSequence,
+            schemaVersion: isV6 ? 6 : 2, processorVersion: isV6 ? "rep-analysis-v6" : "rep-analysis-v2", ingestSequence: ingestSequence,
             boundary: ingestSequence == 0 ? .start : nil, input: RawMotionEvent(sample), output: snapshot,
             uniformSamples: Array(newSamples), profileID: profile.profileID, profileHash: profile.contentHash
         )
@@ -135,10 +141,14 @@ actor V2SetEngine {
     private func process(_ sample: ResampledMotionSample, profile: V2DSPProfile) {
         preparationStart = preparationStart ?? sample.sourceTimestamp
         if state == .preparing {
-            if let reference = referenceAcquirer.observe(sample, profile: profile) {
+            let reference = profile.identity.profileVersion == "experimental-v6"
+                ? v6ReferenceAcquirer.observe(sample, profile: profile)
+                : referenceAcquirer.observe(sample, profile: profile)
+            if let reference {
                 filter.reset()
                 segmenter?.reset()
                 templateSegmenter?.reset()
+                v6Detector?.reset()
                 if sample.sourceTimestamp - (preparationStart ?? sample.sourceTimestamp) >=
                     profile.identity.timing.minimumPreparationDuration {
                     state = .active; activationTimestamp = sample.sourceTimestamp; quality = .usable
@@ -147,7 +157,18 @@ actor V2SetEngine {
             }
             return
         }
-        guard let reference = referenceAcquirer.measurements else { return }
+        guard let reference = activeReference else { return }
+        if var v6Detector {
+            let update = v6Detector.observe(sample, reference: reference, departureAllowed: state == .active)
+            for event in v6Detector.events where !event.committed && event.rejectionReason == nil {
+                let withinSet = event.startTimestamp >= (activationTimestamp ?? .infinity) &&
+                    (state != .finalizing || event.completionTimestamp <= (endRequestTimestamp ?? -.infinity))
+                v6Detector.setCommitted(withinSet, forCandidateID: event.id)
+            }
+            self.v6Detector = v6Detector
+            updateSnapshot(filtered: update.filteredSignal, v6Diagnostics: update.diagnostics)
+            return
+        }
         let source = profile.identity.signalSource == .gravity ? sample.gravity : sample.userAcceleration
         let normalized = profile.identity.polarity * source.value(on: profile.identity.projectionAxis) - reference.neutralSignal
         let filtered = filter.process(normalized)
@@ -172,13 +193,19 @@ actor V2SetEngine {
         updateSnapshot(filtered: filtered)
     }
 
-    private func updateSnapshot(filtered: Double?, reference: V2ReferenceMeasurements? = nil) {
-        let events = segmenter?.events ?? templateSegmenter?.events ?? []
+    private var activeReference: V2ReferenceMeasurements? {
+        profile?.identity.profileVersion == "experimental-v6" ? v6ReferenceAcquirer.measurements : referenceAcquirer.measurements
+    }
+
+    private func updateSnapshot(filtered: Double?, reference: V2ReferenceMeasurements? = nil,
+                                v6Diagnostics: V6Diagnostics? = nil) {
+        let events = v6Detector?.events ?? segmenter?.events ?? templateSegmenter?.events ?? []
         snapshot = .init(ingestSequence: ingestSequence, setState: state, quality: quality,
-                         detectorPhase: segmenter?.phase ?? .waitingForBottom,
+                         detectorPhase: v6Detector?.phase ?? segmenter?.phase ?? .waitingForBottom,
                          committedCount: events.filter(\.committed).count,
-                         reference: reference ?? referenceAcquirer.measurements, filteredSignal: filtered,
-                         landmarks: segmenter?.landmarks ?? .init(), recentEvents: Array(events.suffix(12)))
+                         reference: reference ?? activeReference, filteredSignal: filtered,
+                         landmarks: v6Detector?.landmarks ?? segmenter?.landmarks ?? .init(),
+                         recentEvents: Array(events.suffix(12)), v6Diagnostics: v6Diagnostics ?? snapshot.v6Diagnostics)
     }
 
     private func finishComplete() async {
@@ -187,7 +214,7 @@ actor V2SetEngine {
         do {
             guard let bundle = try await recorder?.finalize(state: .complete, failure: nil,
                                                              snapshot: snapshot,
-                                                             reference: referenceAcquirer.measurements) else {
+                                                             reference: activeReference) else {
                 throw V2Error.recordingFailure("finalization produced no session bundle")
             }
             completedBundle = bundle
@@ -205,9 +232,10 @@ actor V2SetEngine {
         state = .interrupted; interruption = reason; quality = qualityFor(reason)
         templateSegmenter?.reset(discontinuity: true)
         segmenter?.reset(discontinuity: true)
+        v6Detector?.reset(discontinuity: true)
         updateSnapshot(filtered: snapshot.filteredSignal)
         completedBundle = try? await recorder?.finalize(state: .interrupted, failure: reason,
-                                                        snapshot: snapshot, reference: referenceAcquirer.measurements)
+                                                        snapshot: snapshot, reference: activeReference)
     }
 
     private func qualityFor(_ reason: V2SetInterruption) -> SignalQualityState {

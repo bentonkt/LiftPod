@@ -178,6 +178,9 @@ struct V2LocalCycleSegmenter: Sendable {
                 }
             }
             if timestamp - start > timing.maximumCycleDuration { reject(.invalidDuration, at: timestamp); reset() }
+        case .estimatingAxis, .bottomPending, .recovering:
+            // These phases are owned by the V6 detector and are unreachable here.
+            reset(discontinuity: true)
         }
         return Array(events.dropFirst(before))
     }

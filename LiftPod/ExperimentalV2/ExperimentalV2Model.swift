@@ -5,6 +5,7 @@ import Foundation
 final class ExperimentalV2Model: ObservableObject {
     @Published var selectedExercise: V2Exercise = .bicepsCurl { didSet { refreshProfile() } }
     @Published var selectedSide: ExperimentalSensorSide = .right { didSet { refreshProfile() } }
+    @Published var selectedAlgorithm: V6Algorithm = .qualifiedLocalCycle { didSet { refreshProfile() } }
     @Published var setupConfirmed = false
     @Published var airPodsModelLabel = ""
     @Published var observedCount = ""
@@ -28,7 +29,7 @@ final class ExperimentalV2Model: ObservableObject {
 
     var unavailableMessage: String? {
         selectedExercise == .bicepsCurl && selectedSide == .right ? nil :
-            "This exercise and setup require calibration or an imported eligible Experimental V2 profile."
+            "This exercise and setup require calibration or an imported eligible Experimental V6 profile."
     }
 
     func canStart(motionActive: Bool, sideVerified: Bool, otherRecordingActive: Bool) -> Bool {
@@ -80,7 +81,7 @@ final class ExperimentalV2Model: ObservableObject {
 
     func saveReview() {
         guard let directory = exportURLs?.directory else {
-            latestError = "Complete a set before saving an Experimental V2 review."; return
+            latestError = "Complete a set before saving an Experimental V6 review."; return
         }
         do {
             let count = observedCount.isEmpty ? nil : Int(observedCount)
@@ -112,9 +113,16 @@ final class ExperimentalV2Model: ObservableObject {
     }
 
     private func refreshProfile() {
-        profile = selectedExercise == .bicepsCurl && selectedSide == .right ? .bundledCurl : nil
+        guard selectedExercise == .bicepsCurl, selectedSide == .right else { profile = nil; return }
+        switch selectedAlgorithm {
+        case .qualifiedLocalCycle: profile = .bundledCurl
+        case .fixedAxisAngular: profile = .fixedAxisAngularCurl
+        case .adaptiveAxis: profile = .adaptiveCurlV6
+        }
         snapshot = .init(ingestSequence: -1, setState: .idle, quality: .warmingUp,
                          detectorPhase: .waitingForBottom, committedCount: 0, reference: nil,
                          filteredSignal: nil, landmarks: .init(), recentEvents: [])
     }
 }
+
+typealias ExperimentalV6Model = ExperimentalV2Model

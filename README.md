@@ -59,9 +59,9 @@ After successful processing, the app displays the source and calibration measure
 
 The preprocessing thresholds are configurable engineering defaults awaiting evaluation with physical data: standard gravity `9.80665 m/s²`, calibration duration `3.0 s`, minimum calibration count `60`, plausible gravity magnitude `0.75–1.25 g`, maximum adjacent source gap `0.200 s`, maximum calibration vertical-acceleration standard deviation `0.20 m/s²`, maximum calibration gyroscope RMS `0.15 rad/s`, and low-pass cutoff `5.0 Hz`.
 
-## Experimental V2 Signal Lab
+## Experimental V6 Signal Lab
 
-**Experimental V2 Signal Lab** is a separate engineering screen for live and offline signal analysis. Raw capture and offline preprocessing remain independent. Manual exercise selection is the only authorization source; no exercise classifier is enabled.
+**Experimental V6 Signal Lab** is a separate engineering screen for live signal analysis. Raw capture and offline preprocessing remain independent. Manual exercise selection is the only authorization source; no exercise classifier is enabled.
 
 Only the bundled right-side biceps-curl profile is immediately available. It assumes a repeatable right-AirPod mounting orientation and a held weight. Its gravity-X projection, 4 Hz biquad, reference range, and local-cycle thresholds are experimental and setup-dependent. Lateral raises and overhead presses remain unavailable until guided calibration or import supplies an eligible full-cycle profile. Generated and imported profiles are never automatically marked validated.
 
@@ -69,7 +69,9 @@ Only the bundled right-side biceps-curl profile is immediately available. It ass
 
 Starting a set validates the frozen profile and setup, starts recording, clears all processor state, and enters **Preparing**. The user holds the weight still for at least three seconds. A rolling 500–750 ms reference window uses robust activity, signal spread, median absolute deviation, drift, quaternion-center, gravity, noise, and observed-rate measurements. Brief isolated corrections are tolerated; sustained motion or orientation drift prevents readiness.
 
-The curl segmenter is separate from validation. It tracks a local bottom, persistent departure, local top, direction reversal, lowest credible return, and settled completion. Outbound and return excursion, direction-aware reference bounds, phase ordering, durations, pause, and refractory rules are checked explicitly. A return may finish slightly deeper than the prepared bottom, but stopping too high or returning more than half a trained span below the reference is rejected. Completion uses the lowest credible return timestamp; detection can occur later after gyroscopic settling. An incomplete return can be rejected and its low point reused so it does not consume the following valid lift.
+Three frozen detector profiles are available for comparison. **Qualified local cycle (V4)** retains the scalar gravity projection. **Fixed-axis angular (V5)** projects gravity into the plane normal to a fixed unit axis, computes signed angle with `atan2(axis · (reference × current), reference · current)`, unwraps the result continuously, and checks signed gyroscope direction. **Adaptive-axis (V6)** estimates a candidate-local rotation axis from gyroscope samples after removing the component parallel to gravity. It uses a deterministic 24-iteration principal-axis solve, requires at least 0.80 energy fraction and 0.85 directional coherence across 180–700 ms, and freezes the axis only after three estimates remain within 0.12 radians.
+
+All modes feed the same qualified-cycle state machine. It tracks a qualified bottom, persistent departure, local top, direction reversal, lowest credible return, a pending-bottom state, and settled or next-leg completion. Outbound and return excursion, signed direction, reference bounds, phase ordering, duration, turnaround pause, and per-guard persistence are checked explicitly. The adaptive detector additionally requires at least 0.65 of cycle gyroscope energy along its frozen axis. Degenerate projected gravity, excessive unwrap steps, incoherent axes, ambiguous rebounds, and discontinuities reject or abandon the candidate and require a quiet near-reference recovery before another adaptive candidate can begin.
 
 ### Templates and guided calibration
 
@@ -108,7 +110,7 @@ This procedure requires real hardware and is not performed by automated tests:
 13. Confirm that the CSV contains a header and multiple data rows.
 14. Confirm that each row contains the reported sensor location and raw motion fields.
 15. Disconnect the AirPods and confirm that the app reports the interruption without crashing.
-16. Reconnect, open Experimental V2 Signal Lab, confirm the right-side mounting setup, and start a curl set.
+16. Reconnect, open Experimental V6 Signal Lab, confirm the right-side mounting setup, choose a detector, and start a curl set.
 17. Hold the loaded starting position still until the reference becomes ready and the set becomes Active.
 18. Perform slow, normal, partial-return, and complete curls while independently recording observations.
 19. End the set, allow Finalizing to complete, and export the full session bundle.

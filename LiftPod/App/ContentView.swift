@@ -33,7 +33,7 @@ struct ContentView: View {
 
     private var experimentalV2Section: some View {
         Section("Experimental Signal Analysis") {
-            NavigationLink("Experimental V2 Signal Lab") {
+            NavigationLink("Experimental V6 Signal Lab") {
                 ExperimentalV2SignalLabView(capture: model)
             }
             Text("Live set lifecycle, local-cycle diagnostics, recording, replay, and calibration tools.")

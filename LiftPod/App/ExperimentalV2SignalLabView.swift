@@ -3,7 +3,7 @@ import SwiftUI
 struct ExperimentalV2SignalLabView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var capture: CaptureModel
-    @StateObject private var model = ExperimentalV2Model()
+    @StateObject private var model = ExperimentalV6Model()
     @State private var developerControlsExpanded = false
 
     var body: some View {
@@ -15,7 +15,7 @@ struct ExperimentalV2SignalLabView: View {
             reviewSection
             developerSection
         }
-        .navigationTitle("Experimental V2 Signal Lab")
+        .navigationTitle("Experimental V6 Signal Lab")
         .onChange(of: capture.latestSample?.index) { _, _ in
             guard let sample = capture.latestSample else { return }
             Task { await model.ingest(sample) }
@@ -38,6 +38,9 @@ struct ExperimentalV2SignalLabView: View {
             }
             Picker("Expected AirPod", selection: $model.selectedSide) {
                 ForEach(ExperimentalSensorSide.allCases) { Text($0.rawValue.capitalized).tag($0) }
+            }
+            Picker("Detector", selection: $model.selectedAlgorithm) {
+                ForEach(V6Algorithm.allCases, id: \.self) { Text(algorithmName($0)).tag($0) }
             }
             TextField("Optional AirPods model label", text: $model.airPodsModelLabel)
             Toggle("Sensor side and mounting confirmed", isOn: $model.setupConfirmed)
@@ -81,10 +84,18 @@ struct ExperimentalV2SignalLabView: View {
             row("Local bottom", number(model.snapshot.landmarks.bottom))
             row("Local top", number(model.snapshot.landmarks.top))
             row("Local return", number(model.snapshot.landmarks.returned))
+            if let diagnostics = model.snapshot.v6Diagnostics {
+                row("Bottom qualified", diagnostics.bottomQualified ? "Yes" : "No")
+                row("Candidate", diagnostics.candidateID ?? "—")
+                row("Axis energy", number(diagnostics.axisEnergyFraction))
+                row("Unwrapped angle", number(diagnostics.unwrappedAngle))
+                row("Signed rotation", number(diagnostics.signedRotationRate))
+                row("Last rejection", diagnostics.rejectionReason?.rawValue ?? "—")
+            }
             row("Replay", model.replayStatus)
             if let urls = model.exportURLs {
                 ShareLink(items: [urls.rawCSV, urls.transactions, urls.metadata, urls.summary, urls.manifest, urls.profile]) {
-                    Label("Export V2 Session", systemImage: "square.and.arrow.up")
+                    Label("Export V6 Session", systemImage: "square.and.arrow.up")
                 }
             }
         }
@@ -119,9 +130,9 @@ struct ExperimentalV2SignalLabView: View {
         Section {
             DisclosureGroup("Developer Controls", isExpanded: $developerControlsExpanded) {
                 Button("Guided Calibration") { }.disabled(true)
-                Button("Import V2 Profile") { }.disabled(true)
+                Button("Import V6 Profile") { }.disabled(true)
                 Button("Offline Profile Evaluation") { }.disabled(true)
-                Text("Calibration records exactly three uninterrupted demonstrations. Profile import and offline evaluation require versioned V2 data.")
+                Text("Calibration records exactly three uninterrupted demonstrations. Profile import and offline evaluation require versioned V6 data.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -130,4 +141,11 @@ struct ExperimentalV2SignalLabView: View {
     private func sideMatches(_ sample: RawMotionSample) -> Bool { model.selectedSide.matches(sample.sensorLocation) }
     private func row(_ name: String, _ value: String) -> some View { LabeledContent(name, value: value) }
     private func number(_ value: Double?) -> String { value.map { String(format: "%.6f", $0) } ?? "—" }
+    private func algorithmName(_ value: V6Algorithm) -> String {
+        switch value {
+        case .qualifiedLocalCycle: "Qualified local cycle (V4)"
+        case .fixedAxisAngular: "Fixed-axis angular (V5)"
+        case .adaptiveAxis: "Adaptive-axis (V6)"
+        }
+    }
 }
