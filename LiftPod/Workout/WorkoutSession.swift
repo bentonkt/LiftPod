@@ -170,26 +170,80 @@ struct SetVelocityProfile: Codable, Equatable {
     let meanLiftingSpeeds: [Double?]
     let estimatorVersion: String
     let measurementKind: String
+    var precedingPauses: [Double]? = nil
 
-    var availableRepCount: Int { meanLiftingSpeeds.compactMap { $0 }.count }
+    var hasInterruptedCadence: Bool {
+        precedingPauses?.suffix(5).contains { $0.isFinite && $0 > 3 } ?? false
+    }
+
+    private var validSpeeds: [(index: Int, speed: Double)] {
+        meanLiftingSpeeds.enumerated().compactMap { index, speed in
+            guard let speed, speed.isFinite, speed > 0 else { return nil }
+            return (index, speed)
+        }
+    }
+    var availableRepCount: Int { validSpeeds.count }
     var baselineSpeed: Double? {
-        let early = meanLiftingSpeeds.prefix(3).compactMap { $0 }.filter { $0.isFinite && $0 > 0 }
-        return early.count >= 2 ? early.max() : nil
+        let early = validSpeeds.filter { $0.index < 3 }.map(\.speed).sorted()
+        guard early.count >= 2 else { return nil }
+        // Retain a fast reference, but prevent one startup spike from defining fatigue.
+        let fastest = early[early.count - 1], runnerUp = early[early.count - 2]
+        return fastest > runnerUp * 1.25 ? runnerUp : fastest
+    }
+    var hasUsableEvidence: Bool {
+        meanLiftingSpeeds.count >= 3 && availableRepCount >= 3 &&
+        Double(availableRepCount) / Double(meanLiftingSpeeds.count) >= 0.60 &&
+        validSpeeds.last?.index == meanLiftingSpeeds.count - 1 && baselineSpeed != nil
+    }
+
+    /// A short Theil–Sen fit preserves a sustained decline without letting one
+    /// unusually fast/slow rep dictate RIR. Rep indices retain gaps in the data.
+    private var recentFit: (speed: Double, slope: Double, residual: Double)? {
+        guard hasUsableEvidence else { return nil }
+        let points = validSpeeds.filter { $0.index >= meanLiftingSpeeds.count - 5 }
+        guard points.count >= 3, let last = points.last else { return nil }
+        var slopes: [Double] = []
+        for i in points.indices {
+            for j in points.indices where j > i {
+                slopes.append((points[j].speed - points[i].speed) / Double(points[j].index - points[i].index))
+            }
+        }
+        let slope = Self.median(slopes)
+        let atLast = Self.median(points.map { $0.speed + slope * Double(last.index - $0.index) })
+        let residual = points.map {
+            abs($0.speed - (atLast + slope * Double($0.index - last.index)))
+        }.max() ?? 0
+        guard atLast.isFinite, atLast > 0, slope.isFinite else { return nil }
+        return (atLast, slope, residual)
+    }
+    var recentSpeed: Double? { recentFit?.speed }
+    var slowdownPerRep: Double? {
+        guard let baselineSpeed, let fit = recentFit else { return nil }
+        return -100 * fit.slope / baselineSpeed
+    }
+    var isNoisy: Bool {
+        guard let baselineSpeed, let fit = recentFit else { return true }
+        return fit.residual / baselineSpeed > 0.15
     }
     var velocityLossPercent: Double? {
-        guard let baselineSpeed, let final = meanLiftingSpeeds.last ?? nil,
-              final.isFinite, final > 0 else { return nil }
-        return min(90, max(0, 100 * (1 - final / baselineSpeed)))
+        guard let baselineSpeed, let speed = recentSpeed else { return nil }
+        return min(90, max(0, 100 * (1 - speed / baselineSpeed)))
+    }
+    static func median(_ values: [Double]) -> Double {
+        let sorted = values.sorted()
+        guard !sorted.isEmpty else { return 0 }
+        let middle = sorted.count / 2
+        return sorted.count.isMultiple(of: 2) ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
     }
 
     init?(set: SessionSet, metrics: RepMetricsSnapshot?) {
         guard let metrics else { return nil }
         let byID = Dictionary(grouping: metrics.reps, by: \.id)
         let matched = set.reps.map { rep in
-            byID[rep.id]?.last(where: { $0.status == .available })
+            byID[rep.id]?.last
         }
         let speeds = matched.map { metric -> Double? in
-            guard let value = metric?.meanLiftingSpeed, value.isFinite, value > 0 else { return nil }
+            guard metric?.status == .available, let value = metric?.meanLiftingSpeed, value.isFinite, value > 0 else { return nil }
             return value
         }
         let available = speeds.compactMap { $0 }.count
@@ -199,19 +253,25 @@ struct SetVelocityProfile: Codable, Equatable {
               let representative = matched.compactMap({ $0 }).last,
               let estimatorVersion = representative.estimatorVersion,
               let measurementKind = representative.measurementKind else { return nil }
+        guard matched.compactMap({ $0 }).filter({ $0.status == .available }).allSatisfy({
+            $0.estimatorVersion == estimatorVersion && $0.measurementKind == measurementKind
+        }) else { return nil }
         self.meanLiftingSpeeds = speeds
         self.estimatorVersion = estimatorVersion
         self.measurementKind = measurementKind
+        precedingPauses = set.reps.enumerated().map { index, rep in
+            index == 0 ? 0 : max(0, rep.start - set.reps[index - 1].end)
+        }
         guard baselineSpeed != nil, velocityLossPercent != nil else { return nil }
     }
 
     init?(set: SessionSet, genericMetrics: [GenericCycleMetrics]) {
         let byID = Dictionary(grouping: genericMetrics, by: \.id)
         let matched = set.reps.map { rep in
-            byID[rep.id]?.last(where: { $0.status == .available })
+            byID[rep.id]?.last
         }
         let speeds = matched.map { metric -> Double? in
-            guard let value = metric?.meanSpeed, value.isFinite, value > 0 else { return nil }
+            guard metric?.status == .available, let value = metric?.meanSpeed, value.isFinite, value > 0 else { return nil }
             return value
         }
         let available = speeds.compactMap { $0 }.count
@@ -219,9 +279,15 @@ struct SetVelocityProfile: Codable, Equatable {
               Double(available) / Double(speeds.count) >= 0.60,
               speeds.last! != nil,
               let estimatorVersion = matched.compactMap({ $0 }).last?.estimatorVersion else { return nil }
+        let qualified = matched.compactMap { $0 }.filter { $0.status == .available }
+        guard Set(qualified.map(\.learningEpoch)).count == 1,
+              qualified.allSatisfy({ $0.estimatorVersion == estimatorVersion }) else { return nil }
         self.meanLiftingSpeeds = speeds
         self.estimatorVersion = estimatorVersion
         self.measurementKind = "generic-cycle-speed"
+        precedingPauses = set.reps.enumerated().map { index, rep in
+            matched[index]?.precedingPause ?? (index == 0 ? 0 : max(0, rep.start - set.reps[index - 1].end))
+        }
         guard baselineSpeed != nil, velocityLossPercent != nil else { return nil }
     }
 
@@ -235,7 +301,7 @@ struct SetVelocityProfile: Codable, Equatable {
 
 struct AutomaticRIREstimate: Equatable {
     enum Method: String, Equatable {
-        case individualized = "Personal velocity model"
+        case individualized = "Personal rep-speed trajectory"
         case populationHeuristic = "Velocity-loss estimate"
     }
     enum Confidence: String, Equatable {
@@ -251,6 +317,15 @@ struct AutomaticRIREstimate: Equatable {
     let confidence: Confidence
     let calibrationSetCount: Int
     let cappedAtFourPlus: Bool
+    var lowerRIR: Int = 0
+    var upperRIR: Int = 4
+    var validationMAE: Double? = nil
+    var explanation: String = ""
+
+    var rangeDescription: String {
+        let upper = upperRIR >= 4 ? "4+" : String(upperRIR)
+        return lowerRIR == upperRIR ? upper : "\(lowerRIR)–\(upper)"
+    }
 }
 
 struct LoggedWorkoutSet: Codable, Identifiable, Equatable {
@@ -305,29 +380,31 @@ struct LoadPrediction: Equatable {
 struct RestRecommendation: Equatable {
     enum Basis: Equatable {
         case rir
+        case repHeuristic
         case velocityLoss(percent: Double)
         case performanceDrop(percent: Double)
     }
 
     let seconds: Int
     let reps: Int
-    let repsInReserve: Int
+    let repsInReserve: Int?
     let basis: Basis
     let explanation: String
 
-    init?(reps: Int, repsInReserve: Int, velocityLossPercent: Double? = nil,
+    init?(reps: Int, repsInReserve: Int?, velocityLossPercent: Double? = nil,
           precedingRestSeconds: Double? = nil, previousReps: Int? = nil,
           previousRepsInReserve: Int? = nil) {
-        guard (1...100).contains(reps), (0...4).contains(repsInReserve) else { return nil }
+        guard (1...100).contains(reps), repsInReserve.map({ (0...4).contains($0) }) ?? true else { return nil }
         // A 90-second floor follows the 2024 hypertrophy meta-analysis. The
         // graduated RIR and high-repetition additions are deliberately coarse:
         // controlled studies support their direction, not an exact curl formula.
-        let proximityAddition = 30 * max(0, 3 - repsInReserve)
+        let proximityAddition = 30 * max(0, 3 - (repsInReserve ?? 2))
         let highRepAddition = reps >= 12 ? 30 : 0
         let rirSeconds = 90 + proximityAddition + highRepAddition
         var recommendedSeconds = rirSeconds
-        var selectedBasis: Basis = .rir
-        var selectedExplanation = "Based on \(reps) reps at \(repsInReserve) RIR."
+        var selectedBasis: Basis = repsInReserve == nil ? .repHeuristic : .rir
+        var selectedExplanation = repsInReserve.map { "Based on \(reps) reps at \($0) RIR." }
+            ?? "Low confidence · Rep-based rest: 2 minutes, plus 30 seconds for 12+ reps; effort is unknown."
 
         // Velocity loss is used as another view of the same set fatigue, so it
         // establishes a floor rather than adding time to the RIR estimate.
@@ -347,7 +424,7 @@ struct RestRecommendation: Equatable {
         // repetitions fell by at least 20%. LiftPod compares estimated rep
         // capacity (completed reps + RIR) so sets stopped at different RIR are
         // more comparable. Recommendations never decrease from this feedback.
-        if let rest = precedingRestSeconds, rest.isFinite, rest > 0,
+        if let repsInReserve, let rest = precedingRestSeconds, rest.isFinite, rest > 0,
            let previousReps, let previousRIR = previousRepsInReserve,
            (1...100).contains(previousReps), (0...4).contains(previousRIR) {
             let previousCapacity = previousReps + previousRIR
@@ -427,8 +504,7 @@ final class WorkoutHistoryStore: ObservableObject {
     }
 
     func restRecommendation(after set: LoggedWorkoutSet) -> RestRecommendation? {
-        guard let rir = set.repsInReserve, (0...10).contains(rir) else { return nil }
-        let modeledRIR = min(4, rir)
+        let modeledRIR = set.repsInReserve.map { min(4, max(0, $0)) }
         let previous = set.precedingSetID.flatMap { precedingID in
             sets.first { $0.sessionID == set.sessionID && $0.sourceSetID == precedingID }
         }
@@ -448,75 +524,158 @@ final class WorkoutHistoryStore: ObservableObject {
         )
     }
 
-    /// Uses an individual within-set velocity/RIR relationship when enough
-    /// user-corrected history exists. Until then, a bench-press velocity-loss
-    /// equation is used only as an explicitly low-confidence population prior.
+    /// All paths use the same robust finalized speed features as live coaching.
     func automaticRIR(for exercise: V2Exercise, completedReps: Int,
-                      velocityProfile: SetVelocityProfile) -> AutomaticRIREstimate? {
-        guard completedReps >= 1, let currentLoss = velocityProfile.velocityLossPercent else { return nil }
-        let compatible = sets.filter {
-            $0.exercise == exercise && $0.rirValueSource == .userEntered &&
-            $0.velocityProfile?.estimatorVersion == velocityProfile.estimatorVersion &&
-            $0.velocityProfile?.measurementKind == velocityProfile.measurementKind
-        }
-        if let personalized = Self.personalizedRIR(
-            currentLoss: currentLoss, current: velocityProfile,
-            calibrationSets: compatible
-        ) { return personalized }
-
-        // Gonzalez-Badillo et al. (2017), 50-70% 1RM bench press:
-        // percent completed = -0.00855*VL^2 + 1.83311*VL + 5.55281.
-        // This is a cold-start heuristic because exercise and measurement mode
-        // differ; it is replaced as soon as a validated individual fit exists.
-        let modeledLoss = min(75, max(0, currentLoss))
-        let percentCompleted = min(95, max(5.55281,
-            -0.00855 * modeledLoss * modeledLoss + 1.83311 * modeledLoss + 5.55281))
-        let rawRIR = max(0, Double(completedReps) / (percentCompleted / 100) - Double(completedReps))
-        let rounded = Int(rawRIR.rounded())
-        return .init(repsInReserve: min(4, rounded), velocityLossPercent: currentLoss,
-                     measuredRepCount: velocityProfile.availableRepCount,
-                     method: .populationHeuristic, confidence: .low,
-                     calibrationSetCount: 0, cappedAtFourPlus: rounded >= 4)
-    }
-
-    private static func personalizedRIR(currentLoss: Double, current: SetVelocityProfile,
-                                        calibrationSets: [LoggedWorkoutSet]) -> AutomaticRIREstimate? {
-        guard calibrationSets.count >= 2 else { return nil }
-        var points: [(loss: Double, rir: Double)] = []
-        for set in calibrationSets {
-            guard let finalRIR = set.repsInReserve, let profile = set.velocityProfile,
-                  profile.meanLiftingSpeeds.count == set.reps,
-                  let baseline = profile.baselineSpeed else { continue }
-            for (index, speed) in profile.meanLiftingSpeeds.enumerated() {
-                guard let speed, speed.isFinite, speed > 0 else { continue }
-                let loss = min(90, max(0, 100 * (1 - speed / baseline)))
-                let rir = Double(finalRIR + set.reps - 1 - index)
-                if rir <= 15 { points.append((loss, rir)) }
+                      velocityProfile: SetVelocityProfile, loadLB: Double? = nil) -> AutomaticRIREstimate? {
+        guard completedReps == velocityProfile.meanLiftingSpeeds.count,
+              velocityProfile.hasUsableEvidence,
+              let currentLoss = velocityProfile.velocityLossPercent else { return nil }
+        let compatible = sets.filter { set in
+            set.exercise == exercise && set.rirValueSource == .userEntered &&
+            set.repsInReserve.map { (0...4).contains($0) } == true &&
+            set.velocityProfile?.estimatorVersion == velocityProfile.estimatorVersion &&
+            set.velocityProfile?.measurementKind == velocityProfile.measurementKind &&
+            (loadLB.map { load in abs(set.loadLB - load) <= max(2.5, load * 0.25) } ?? true)
+        }.prefix(24)
+        let samples = compatible.flatMap { set -> [RIRObservation] in
+            guard let profile = set.velocityProfile, profile.meanLiftingSpeeds.count == set.reps,
+                  let finalRIR = set.repsInReserve, set.reps >= 3 else { return [] }
+            return (3...set.reps).compactMap { count in
+                var prefix = SetVelocityProfile(meanLiftingSpeeds: Array(profile.meanLiftingSpeeds.prefix(count)),
+                    estimatorVersion: profile.estimatorVersion, measurementKind: profile.measurementKind)
+                prefix.precedingPauses = profile.precedingPauses.map { Array($0.prefix(count)) }
+                let rir = finalRIR + set.reps - count
+                guard rir <= 10, prefix.hasUsableEvidence, !prefix.isNoisy, !prefix.hasInterruptedCadence,
+                      let features = RIRFeatures(profile: prefix) else { return nil }
+                return RIRObservation(setID: set.id, sessionID: set.sessionID, profile: prefix, rir: Double(rir), features: features)
             }
         }
-        guard points.count >= 8,
-              let minimumLoss = points.map(\.loss).min(), let maximumLoss = points.map(\.loss).max(),
-              maximumLoss - minimumLoss >= 15 else { return nil }
-        let meanX = points.map(\.loss).reduce(0, +) / Double(points.count)
-        let meanY = points.map(\.rir).reduce(0, +) / Double(points.count)
-        let denominator = points.reduce(0) { $0 + pow($1.loss - meanX, 2) }
-        guard denominator > 0 else { return nil }
-        let slope = points.reduce(0) { $0 + ($1.loss - meanX) * ($1.rir - meanY) } / denominator
-        let intercept = meanY - slope * meanX
-        guard slope < 0 else { return nil }
-        let rmse = sqrt(points.reduce(0) {
-            let residual = $1.rir - (intercept + slope * $1.loss)
-            return $0 + residual * residual
-        } / Double(points.count))
-        guard rmse <= 2 else { return nil }
-        let rawRIR = max(0, intercept + slope * currentLoss)
-        let rounded = Int(rawRIR.rounded())
-        let confidence: AutomaticRIREstimate.Confidence =
-            calibrationSets.count >= 3 && rmse <= 1 ? .high : .medium
+        var rawRIR = Self.populationRIR(reps: completedReps, loss: currentLoss)
+        var method: AutomaticRIREstimate.Method = .populationHeuristic
+        var confidence: AutomaticRIREstimate.Confidence = .low
+        var sourceCount = 0
+        var validationMAE: Double?
+        if !velocityProfile.isNoisy, !velocityProfile.hasInterruptedCadence,
+           let personal = Self.trajectoryRIR(current: velocityProfile, samples: samples) {
+            method = .individualized
+            rawRIR = personal.rir
+            sourceCount = personal.setCount
+            // Hold out whole sessions, not adjacent reps from the same set.
+            let sessions = Set(samples.map(\.sessionID))
+            if sessions.count >= 3 {
+                var sessionErrors: [Double] = []
+                var priorErrors: [Double] = []
+                for sessionID in sessions {
+                    let training = samples.filter { $0.sessionID != sessionID }
+                    let heldOut = samples.filter { $0.sessionID == sessionID && $0.rir <= 4 }
+                    var errorsBySet: [UUID: [Double]] = [:]
+                    var priorBySet: [UUID: [Double]] = [:]
+                    for point in heldOut {
+                        guard let prediction = Self.trajectoryRIR(current: point.profile, samples: training),
+                              let loss = point.profile.velocityLossPercent else { continue }
+                        errorsBySet[point.setID, default: []].append(abs(prediction.rir - point.rir))
+                        priorBySet[point.setID, default: []].append(abs(Self.populationRIR(
+                            reps: point.profile.meanLiftingSpeeds.count, loss: loss) - point.rir))
+                    }
+                    if !heldOut.isEmpty, errorsBySet.values.reduce(0, { $0 + $1.count }) >=
+                        Int(ceil(Double(heldOut.count) * 0.8)) {
+                        sessionErrors.append(Self.mean(errorsBySet.values.map(Self.mean)))
+                        priorErrors.append(Self.mean(priorBySet.values.map(Self.mean)))
+                    }
+                }
+                if sessionErrors.count == sessions.count {
+                    let mae = Self.mean(sessionErrors)
+                    validationMAE = mae
+                    if mae <= 2 && mae <= Self.mean(priorErrors) {
+                        confidence = .medium
+                    } else {
+                        // A failed validation must not silently replace the prior.
+                        rawRIR = Self.populationRIR(reps: completedReps, loss: currentLoss)
+                        method = .populationHeuristic
+                    }
+                }
+            }
+        }
+        let uncertainty = confidence == .medium ? max(1, validationMAE ?? 2) :
+            (velocityProfile.isNoisy || velocityProfile.hasInterruptedCadence ? 3.0 : 2.0)
+        let bounded = min(100, max(0, rawRIR))
+        let rounded = Int(bounded.rounded())
+        let trend = velocityProfile.slowdownPerRep ?? 0
+        let detail = "\(completedReps) reps; \(Int(currentLoss.rounded()))% speed loss; " +
+            "\(trend.formatted(.number.precision(.fractionLength(1)))) percentage points of slowdown per rep."
         return .init(repsInReserve: min(4, rounded), velocityLossPercent: currentLoss,
-                     measuredRepCount: current.availableRepCount, method: .individualized,
-                     confidence: confidence, calibrationSetCount: calibrationSets.count,
-                     cappedAtFourPlus: rounded >= 4)
+            measuredRepCount: velocityProfile.availableRepCount, method: method,
+            confidence: confidence, calibrationSetCount: sourceCount, cappedAtFourPlus: rounded >= 4,
+            lowerRIR: min(4, max(0, Int(floor(bounded - uncertainty)))),
+            upperRIR: min(4, Int(ceil(bounded + uncertainty))), validationMAE: validationMAE,
+            explanation: detail + (velocityProfile.isNoisy ? " Uneven speeds widen the estimate." : "") +
+                (velocityProfile.hasInterruptedCadence ? " Longer pauses between reps reduce confidence." : "") +
+                (confidence == .medium ? " Checked against held-out sessions." : " Provisional estimate; confirm how the set felt."))
+    }
+
+    private struct RIRObservation {
+        let setID: UUID
+        let sessionID: UUID
+        let profile: SetVelocityProfile
+        let rir: Double
+        let features: RIRFeatures
+    }
+
+    /// Cache features once per observation; validation must not refit hundreds
+    /// of identical speed windows on the live motion callback.
+    private struct RIRFeatures {
+        let speed: Double
+        let baseline: Double
+        let loss: Double
+        let trend: Double
+        init?(profile: SetVelocityProfile) {
+            guard let speed = profile.recentSpeed, let baseline = profile.baselineSpeed,
+                  let loss = profile.velocityLossPercent, let trend = profile.slowdownPerRep else { return nil }
+            self.speed = speed; self.baseline = baseline; self.loss = loss; self.trend = trend
+        }
+    }
+
+    /// Match one prefix per previous set: completed reps, absolute speed,
+    /// relative loss and rate of decline jointly describe progress through a set.
+    private static func trajectoryRIR(current: SetVelocityProfile, samples: [RIRObservation])
+        -> (rir: Double, setCount: Int)? {
+        guard let speed = current.recentSpeed, let baseline = current.baselineSpeed,
+              let loss = current.velocityLossPercent, let trend = current.slowdownPerRep else { return nil }
+        var best: [UUID: (distance: Double, rir: Double)] = [:]
+        for sample in samples {
+            let otherSpeed = sample.features.speed, otherBaseline = sample.features.baseline
+            let otherLoss = sample.features.loss, otherTrend = sample.features.trend
+            guard abs(otherLoss - loss) <= 20,
+                  (0.6...1.67).contains(otherBaseline / baseline) else { continue }
+            let distance = pow((otherLoss - loss) / 15, 2) +
+                pow(log(otherSpeed / speed) / 0.35, 2) +
+                pow((otherTrend - trend) / 5, 2) +
+                pow(Double(sample.profile.meanLiftingSpeeds.count - current.meanLiftingSpeeds.count) / 6, 2)
+            guard distance <= 4 else { continue }
+            if distance < (best[sample.setID]?.distance ?? .infinity) {
+                best[sample.setID] = (distance, sample.rir)
+            }
+        }
+        let neighbors = best.sorted {
+            $0.value.distance == $1.value.distance ? $0.key.uuidString < $1.key.uuidString :
+                $0.value.distance < $1.value.distance
+        }.prefix(6).map(\.value)
+        guard neighbors.count >= 2 else { return nil }
+        let weights = neighbors.map { 1 / (0.25 + $0.distance) }
+        let rir = zip(neighbors, weights).reduce(0) { $0 + $1.0.rir * $1.1 } / weights.reduce(0, +)
+        return (rir, neighbors.count)
+    }
+
+    nonisolated private static func mean(_ values: [Double]) -> Double {
+        values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func populationRIR(reps: Int, loss: Double) -> Double {
+        // González-Badillo 2017 bench-press prior, not a validated AirPod model.
+        let modeledLoss = min(75, max(0, loss))
+        let percent = min(100, max(5.55281,
+            -0.00855 * modeledLoss * modeledLoss + 1.83311 * modeledLoss + 5.55281))
+        return min(100, max(0, Double(reps) * (100 / percent - 1)))
     }
 
     /// Selects one bounded equipment step and a rep target for the next set.
@@ -524,16 +683,28 @@ final class WorkoutHistoryStore: ObservableObject {
     /// while the public-data capacity curve checks whether the adjacent load is
     /// likely to remain inside the requested rep range.
     func nextSetRecommendation(for exercise: V2Exercise, repRange: ClosedRange<Int>,
-                               targetRIR: Int, incrementLB: Double = 5) -> LoadPrediction? {
+                               targetRIR: Int, incrementLB: Double = 5,
+                               latestSource: LoggedWorkoutSet? = nil) -> LoadPrediction? {
         guard (1...100).contains(repRange.lowerBound),
               (repRange.lowerBound...100).contains(repRange.upperBound),
               (0...4).contains(targetRIR), incrementLB.isFinite, incrementLB > 0,
-              let source = sets.first(where: {
-                  $0.exercise == exercise && $0.loadLB >= Self.minimumModelLoadLB &&
-                  $0.repsInReserve.map { (0...4).contains($0) } == true
-              }), let sourceRIR = source.repsInReserve else { return nil }
+              let source = latestSource ?? sets.first(where: { $0.exercise == exercise }),
+              source.exercise == exercise else { return nil }
+        guard let sourceRIR = source.repsInReserve, (0...4).contains(sourceRIR),
+              Self.estimatedCapacity(loadLB: source.loadLB,
+                                     repsToFailure: source.reps + sourceRIR) != nil else {
+            let fallback = WorkoutCoach.repBasedAdjustment(loadLB: source.loadLB, reps: source.reps,
+                repRange: repRange, incrementLB: incrementLB)
+            return LoadPrediction(loadLB: fallback.load, targetReps: fallback.reps,
+                targetRIR: targetRIR, estimatedCapacityLB: source.loadLB,
+                source: source, sourceCount: 1, confidence: .low,
+                action: fallback.load > source.loadLB ? .increase :
+                    (fallback.load < source.loadLB ? .decrease : .keep),
+                explanation: fallback.explanation)
+        }
 
-        let observations = sets.filter { set in
+        let evidence = [source] + sets.filter { $0.id != source.id }
+        let observations = evidence.filter { set in
             guard set.exercise == exercise, let rir = set.repsInReserve else { return false }
             return set.loadLB >= Self.minimumModelLoadLB && (0...4).contains(rir) &&
                 (2...15).contains(set.reps + rir)

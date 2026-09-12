@@ -117,9 +117,7 @@ struct ExperimentalV2SignalLabView: View {
             }
             row("Replay", model.replayStatus)
             if let urls = model.exportURLs {
-                ShareLink(items: [urls.rawCSV, urls.transactions, urls.metadata, urls.summary, urls.manifest, urls.profile]) {
-                    Label("Export Session", systemImage: "square.and.arrow.up")
-                }
+                RecordingExportButton(url: urls.directory, title: "Export Recorded Set")
             }
         }
     }

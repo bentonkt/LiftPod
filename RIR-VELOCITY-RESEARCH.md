@@ -1,52 +1,141 @@
-# Automatic RIR from rep velocity
+# RIR from repetitions and rep-speed trajectories
 
-## Product decision
+Updated September 12, 2026. Implementation: `WorkoutSession.swift` and
+`WorkoutModel.swift`. These changes improve signal handling and validation;
+they do not establish measured RIR accuracy for AirPod-recorded dumbbell lifts.
 
-LiftPod estimates repetitions in reserve (RIR) only after a set closes and only when the speed pipeline produces trustworthy finalized mean lifting speeds for at least three detected reps, including the final rep. The estimate pre-fills the review screen, drives the suggested rest time immediately, and remains editable before the set enters workout history.
+## What the evidence supports
 
-The current set's velocity loss is:
+| Primary study | Finding relevant to LiftPod | Implementation implication |
+| --- | --- | --- |
+| [Jukic et al., 2024](https://pmc.ncbi.nlm.nih.gov/articles/PMC10901726/) | In 46 trained participants performing back squats, individual RIR–mean-velocity relationships predicted subsequent-session RIR better than general relationships. Individual mean errors were below two reps across the tested loads. | Learn within the person and exercise. Test on held-out sessions; a good fit to training reps is insufficient. |
+| [Martínez-Rubio et al., 2025](https://pubmed.ncbi.nlm.nih.gov/40125884/) | In 28 participants, individualized bench-press models improved subsequent-session prediction, particularly at 5 RIR. Accuracy varied with exercise mode and proximity to failure. | Keep measurement modes separate and present an estimated range rather than exact certainty. |
+| [González-Badillo et al., 2017](https://pubmed.ncbi.nlm.nih.gov/28192832/) | Bench-press velocity loss related to the proportion of possible repetitions completed across submaximal loads. | Retain the published rep-count/velocity-loss equation as a low-confidence cold-start prior. |
+| [Jukic et al., 2023](https://pubmed.ncbi.nlm.nih.gov/36823322/) | General and individual velocity-loss/percentage-completed relationships transferred poorly to later back-squat sessions. | Do not treat a fixed percentage slowdown as a universal RIR threshold. |
+| [Prediction of Percentage of Completed Repetitions, 2024](https://www.mdpi.com/2076-3417/14/11/4531) | In 29 trained men, percentage-completed prediction was inaccurate across repeated squat sets. Using the first set's fastest velocity also introduced bias as fatigue accumulated. | Rebuild the speed reference each set. Include current absolute speed as well as relative loss. |
+| [Paulsen et al., 2025](https://pubmed.ncbi.nlm.nih.gov/40832580/) | Exercise, load, set number, and velocity-loss threshold affected perceived RIR at a given mean velocity. | Restrict calibration by exercise and similar load. Preserve user correction. |
+| [Martínez-Rubio et al., 2024](https://pubmed.ncbi.nlm.nih.gov/38109899/) | Inter-repetition rest and large individual variation limited equivalence between velocity-loss thresholds and effort. | Longer inter-rep pauses reduce confidence and exclude a trajectory from personal calibration. |
+
+These studies measure bar velocity under specified execution conditions. They do
+not validate ear-mounted IMU speed or the trajectory-matching algorithm below.
+Deliberately slow lifting, altered range of motion, mounting changes, and poor
+technique can resemble fatigue. Consistent lifting intent and technique matter.
+
+## Signal processing now used
+
+- Accept at least three positive finite finalized speed readings, at least 60%
+  coverage, two early reference readings, and a valid final reading. The recent
+  five-rep window must contain at least three readings. Keep original rep indices
+  when readings are missing.
+- Match the latest metric revision. A newer unavailable result cannot resurrect
+  an older available value. Reject mixed estimator versions, measurement kinds,
+  or generic movement-learning epochs within a set.
+- Reference the fastest of the first three valid-position readings. If it exceeds
+  the second-fastest by over 25%, use the second-fastest to contain a startup spike.
+- Fit the last five rep positions with a Theil–Sen line: median pairwise slope,
+  then median projected speed at the final rep. This preserves sustained decline
+  while limiting one extreme reading. The largest residual above 15% of baseline
+  marks the window noisy.
+- Compute speed loss from the fitted recent speed and the within-set baseline.
+  Also compute slowdown rate in percentage points per rep. Noisy windows still
+  receive a provisional estimate with wider uncertainty.
+- Preserve inter-rep pauses. A pause over three seconds in the recent window
+  prevents personal-model use for that estimate. It does not suppress rep-based
+  load/rest advice.
+
+The five-rep window, 25% spike rule, 15% residual rule, three-second pause boundary,
+and coverage thresholds are engineering choices, not published physiological
+constants. The robust fit can delay recognition of an abrupt real decline until
+another rep supports it; the rep ceiling remains an independent stop cue.
+
+Generic movement uses full-cycle mean speed, explicitly identified as
+`generic-cycle-speed`. It is not relabeled as validated concentric bar speed.
+Exercise-specific metrics retain their own measurement identity.
+
+## Estimator
+
+The cold-start prior remains:
 
 ```text
-baseline = fastest available mean lifting speed among the first 3 reps
-velocity loss (%) = 100 × (1 − final rep speed / baseline)
+p = -0.00855 × loss² + 1.83311 × loss + 5.55281
+RIR = completedReps × (100 / p - 1)
 ```
 
-At least 60% of the set's detected reps must have available speed results. Pending, unavailable, non-finite, and non-positive speeds are rejected. RIR is capped at 4 for downstream suggestions; the interface displays `4+` when the uncapped estimate is at least four.
+Loss is bounded to 0–75% for this equation and p to 5.55281–100%. The output is
+bounded numerically and displayed as 4+ when appropriate. Its source is the 2017
+50–70% 1RM bench-press relationship. Applying it to robust IMU speed is an
+unvalidated adaptation, so its confidence remains low.
 
-## Cold start
-
-Before LiftPod has a usable individual model, it applies the published 50–70% 1RM bench-press equation from González-Badillo et al. (2017):
+For personalization, reconstruct each earlier rep's RIR as:
 
 ```text
-percent of possible repetitions completed
-    = −0.00855 × velocityLoss² + 1.83311 × velocityLoss + 5.55281
-
-estimated RIR
-    = completedReps / (percentCompleted / 100) − completedReps
+RIR at prefix = user-entered final RIR + final rep count - prefix rep count
 ```
 
-The equation reported R² = 0.964 and standard error 5.44 percentage points in that study. LiftPod bounds its input and output and labels the result **Low confidence**. It is a starting heuristic, not a validated dumbbell-curl equation: the study used mean propulsive bar velocity in male bench press participants, while LiftPod measures AirPod motion.
+Only user-entered 0–4 final RIR values train the model. Automatically accepted
+values cannot teach the model its own guesses. Corrected rep counts discard
+that set's speed profile. Consider up to 24 recent sets of the same exercise,
+estimator and measurement mode, within 25% of current load (2.5 lb minimum
+allowance). Prefix labels above 10 RIR are excluded.
 
-## Individual model
+Match the current trajectory against prior prefixes using four features:
 
-When a user corrects RIR, LiftPod can reconstruct an RIR label for each rep in that set. If a six-rep set ends at 1 RIR, the six within-set labels are 6, 5, 4, 3, 2, and 1 RIR. Those labels are paired with each rep's velocity loss from the set baseline.
+```text
+distance² = (difference in loss / 15)²
+          + (log(prior recent speed / current recent speed) / 0.35)²
+          + (difference in slowdown per rep / 5)²
+          + (difference in completed reps / 6)²
+```
 
-LiftPod switches to an exercise-, user-, estimator-, and measurement-specific linear regression only when all of these gates pass:
+Require loss within 20 percentage points, baseline-speed ratio 0.6–1.67, and
+squared distance at most four. Take only the closest prefix from each previous
+set, then up to six sets. At least two sets must match. Average their RIR labels
+with weight `1 / (0.25 + distance²)`.
 
-- at least two user-corrected compatible sets;
-- at least eight usable rep observations;
-- at least 15 percentage points of observed velocity-loss range;
-- the fitted slope is negative, so greater velocity loss predicts fewer remaining reps;
-- in-sample root mean squared error is no greater than two repetitions.
+This is a bounded nearest-neighbor engineering model. It combines completed
+repetitions, current speed, accumulated degradation, and degradation rate rather
+than adding multiple independent penalties for the same fatigue. Its distance
+scales need validation against real LiftPod outcomes.
 
-The two-repetition limit follows Jukic et al.'s definition of acceptable prediction error. Three or more calibration sets with error no greater than one repetition are shown as high confidence; other accepted individual fits are medium confidence. Automatically accepted values do not train the individual model, preventing the population heuristic from teaching itself.
+## Confidence and live coaching
 
-## Evidence and limits
+Two matching sets can produce a low-confidence personal estimate. Medium
+confidence requires at least three distinct sessions and leave-one-session-out
+validation. Every session must have predictions for at least 80% of its eligible
+near-failure observations. Average errors within each set, then each session so
+long sets cannot dominate. Mean absolute error must be at most two reps and no
+worse than the population prior on those same observations. A failed complete
+validation falls back to the prior; insufficient validation stays low confidence.
+The app does not award high confidence from these subjective labels.
 
-- [Jukic et al. (2024)](https://pmc.ncbi.nlm.nih.gov/articles/PMC10901726/) compared general and individual linear and quadratic RIR–velocity relationships in 46 resistance-trained people performing free-weight back squats. Individual relationships built in the first testing session produced subsequent-session mean errors below two repetitions across 70%, 80%, and 90% 1RM; general relationships were not consistently acceptable. This supports personalization and the two-repetition quality gate. DOI 10.14814/phy2.15955.
-- [González-Badillo et al. (2017)](https://pubmed.ncbi.nlm.nih.gov/28192832/) found a close relationship between velocity loss and the percentage of possible repetitions completed in bench press across 50–85% 1RM and published the cold-start equation used above. DOI 10.1055/s-0042-120324.
-- [Morán-Navarro et al. (2019)](https://pubmed.ncbi.nlm.nih.gov/29944141/) found that velocity at 2, 4, 6, and 8 RIR was repeatable within an exercise, but variability was higher in bench and shoulder press and among less experienced trainees. This supports exercise-specific estimates and visible uncertainty. DOI 10.1519/JSC.0000000000002017.
-- [Paulsen et al. (2025)](https://pubmed.ncbi.nlm.nih.gov/40832580/) analyzed 2,972 measurements and found that exercise, load, velocity-loss threshold, and set number affected perceived RIR; mean velocity and perceived RIR were complementary rather than interchangeable. This is why LiftPod preserves user review. DOI 10.7717/peerj.19797.
-- [Jukic et al. (2022)](https://pmc.ncbi.nlm.nih.gov/articles/PMC9807551/) reviewed velocity-loss research and concluded that exercise, load, and individual characteristics modify the relationship. The review recommends individual, exercise-specific RIR–velocity relationships. DOI 10.1007/s40279-022-01754-4.
+The displayed RIR band uses ±2 reps for provisional estimates, ±3 with noise or
+long pauses, and at least ±1 (or held-out MAE if larger) for validated personal
+estimates. These are heuristic uncertainty bands, not calibrated statistical
+confidence intervals. Values at four or above retain the `4+` meaning.
 
-No located study validates a population formula for single-arm dumbbell curls measured at the ear. The cold-start result therefore stays visibly low confidence. Device testing should compare LiftPod's estimate with the number of additional technically valid reps actually completed in designated validation sets. Report mean absolute error, error within one and two reps, bias, missing-speed rate, and results by exercise, load, rep range, and user.
+Live coaching uses the same estimator as set review. It marks the effort target
+reached when the whole estimated band is at or below the selected RIR and the
+upper end is finite rather than `4+`. It signals approach when the band overlaps
+the target neighborhood. Reaching the maximum prescribed reps independently
+marks the rep target reached, even without speed. Fixed 12%/19.5% slowdown
+thresholds no longer claim a universal effort target.
+
+Estimation updates only when the speed profile, prescription or history changes;
+features are cached within validation. Signal recovery suppresses speed coaching.
+Missing speed still leaves the concrete rep-based load and rest fallback available.
+
+## Validation completed and remaining
+
+Regression tests cover synthetic sustained decline, startup and terminal spikes,
+invalid numbers, missing final speeds, count mismatch, revised invalid metrics,
+mixed learning epochs, same-session leakage, successful and inconsistent personal
+labels, load/exercise/estimator isolation, pauses, legacy decoding, and target-RIR
+coaching. These verify software behavior, not physiological accuracy.
+
+Next real-data evaluation should use designated validation sets with actual
+additional technically valid reps completed, record lifting intent and mounting,
+and split by entire future sessions. Report raw uncapped RIR MAE/bias, error within
+one and two reps, interval coverage, estimate availability, time to detect the
+chosen target, and performance by exercise/load/rep count. Compare the prior,
+absolute-speed-only, loss-only, and full trajectory models on identical held-out
+examples. Keep a separate final test set when tuning the engineering constants.

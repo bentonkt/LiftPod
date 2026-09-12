@@ -6,6 +6,12 @@ Current scope: native iPhone workout tracking, manual exercise selection, explic
 
 ## Implemented adaptations
 
+- Developer home exports the latest workout set as a complete ZIP; the signal lab exports its completed set as a ZIP. Raw recording export saves CSV through Files and reports failures.
+- Removed confidence labels from workout rep/load recommendations and automatic RIR text, retaining measured inputs and model details.
+
+- Restored the Claude reference’s white workout appearance, faint blue background glow, and translucent white cards while retaining the added controls. The top-left name still switches to the developer interface.
+- Removed the mount-confirmation checkbox and its start gate. Live right-AirPod motion is still required; mounting guidance remains informational.
+
 - Both interfaces default to generic movement counting for curls, lateral raises, overhead press, and future exercise selections. Specialized comparison profiles remain selectable in the developer lab.
 - The main workout keeps detector choices out of setup. Bundled Adaptive V6 curl and Gravity Tilt lateral-raise profiles remain available for comparison in the developer lab.
 - Tap the top-left liftpod wordmark to switch between workout and developer interfaces; tap it again to return. The capture and workout models stay alive across switches.

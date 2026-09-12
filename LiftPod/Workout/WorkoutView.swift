@@ -2,7 +2,8 @@ import SwiftUI
 
 private enum LiftStyle {
     static let blue = Color(red: 49 / 255, green: 91 / 255, blue: 1)
-    static let secondary = Color.secondary
+    static let ink = Color(red: 11 / 255, green: 11 / 255, blue: 12 / 255)
+    static let secondary = Color(red: 107 / 255, green: 110 / 255, blue: 118 / 255)
 }
 
 struct WorkoutView: View {
@@ -20,7 +21,7 @@ struct WorkoutView: View {
     var body: some View {
         Group {
             if developerMode {
-                ContentView(model: capture, toggleInterface: { developerMode = false })
+                ContentView(model: capture, workoutRecordingDirectory: workout.summaryURL?.deletingLastPathComponent(), toggleInterface: { developerMode = false })
             } else {
                 workoutInterface
             }
@@ -58,16 +59,17 @@ struct WorkoutView: View {
                 .frame(minHeight: max(0, geometry.size.height - 110), alignment: .top)
             }
             .background {
-                Color(.systemBackground).ignoresSafeArea()
+                Color.white.ignoresSafeArea()
                     .overlay {
-                        RadialGradient(colors: [LiftStyle.blue.opacity(0.09), .clear],
+                        RadialGradient(colors: [LiftStyle.blue.opacity(0.028), .clear],
                                        center: .init(x: 0.5, y: 0.38), startRadius: 30, endRadius: 360)
                             .ignoresSafeArea()
                     }
             }
             .safeAreaInset(edge: .bottom) { bottomControls.padding(.horizontal, 26).padding(.bottom, 12) }
         }
-        .foregroundStyle(.primary).tint(LiftStyle.blue)
+        .foregroundStyle(LiftStyle.ink).tint(LiftStyle.blue)
+        .preferredColorScheme(.light)
         .sheet(isPresented: $showingSetup, onDismiss: openPendingDiagnostics) { setupSheet }
         .sheet(isPresented: $showingSupport, onDismiss: openPendingDiagnostics) {
             LiftSupportView(status: statusText) { diagnosticsPending = true; showingSupport = false }
@@ -184,10 +186,7 @@ struct WorkoutView: View {
                     .font(.system(size: 14, weight: .semibold)).tracking(1.8).foregroundStyle(.secondary)
                 Text("\(set.reps) reps")
                     .font(.system(size: 38, weight: .semibold)).tracking(-1)
-                if let slowdown = set.slowdownPercent {
-                    Text("\(Int(slowdown.rounded()))% slower than baseline")
-                        .font(.system(size: 17)).foregroundStyle(.secondary)
-                }
+                setSpeedReadout(set).font(.subheadline)
                 Text(set.targetDescription).font(.subheadline).foregroundStyle(.secondary)
             }.accessibilityIdentifier("set-result")
             if let prediction = workout.loadPrediction() {
@@ -207,8 +206,23 @@ struct WorkoutView: View {
                         .fontWeight(.semibold).foregroundStyle(LiftStyle.blue)
                 }
             }.font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+            if let recommendation = workout.restRecommendation {
+                Text(recommendation.explanation).font(.caption).foregroundStyle(.secondary)
+            }
             Spacer(minLength: 12)
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func setSpeedReadout(_ set: WorkoutSetResult) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            LabeledContent("Peak speed", value: set.peakSpeedMPS.map {
+                "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
+            } ?? "Not measured")
+            LabeledContent("Speed degradation", value: set.slowdownPercent.map {
+                "\($0.formatted(.number.precision(.fractionLength(0))))%"
+            } ?? "Not measured")
+        }.monospacedDigit().foregroundStyle(.secondary)
+            .accessibilityIdentifier("set-speed-metrics")
     }
 
     private func summary(_ result: WorkoutSetResult) -> some View {
@@ -233,10 +247,7 @@ struct WorkoutView: View {
                                 .font(.system(size: 19, weight: .medium))
                             Text("\(set.reps) reps · \(set.prescription.loadLB.formatted()) lb")
                                 .font(.system(size: 15)).foregroundStyle(.secondary)
-                            if let slowdown = set.slowdownPercent {
-                                Text("\(Int(slowdown.rounded()))% slower than baseline")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
+                            setSpeedReadout(set).font(.caption)
                             if let plan = set.nextSetPlan {
                                 Text(plan.title).font(.caption.weight(.semibold)).foregroundStyle(LiftStyle.blue)
                             }
@@ -291,7 +302,7 @@ struct WorkoutView: View {
         } else {
             Button(primaryLabel) {
                 if !capture.monitoringActive { capture.startMotion() }
-                else if !workout.mountConfirmed || !workout.prescription.isValid || !workout.supportedExercise { showingSetup = true }
+                else if !workout.prescription.isValid || !workout.supportedExercise { showingSetup = true }
                 else { Task { await workout.startSet(capture) } }
             }.buttonStyle(LiftPrimaryStyle())
                 .disabled(capture.monitoringActive && !needsSetup && (!signalLive || capture.recordingActive))
@@ -330,7 +341,6 @@ struct WorkoutView: View {
                 }
                 if workout.session == nil {
                     Section("Mount") {
-                        Toggle("Right AirPod and mount confirmed", isOn: $workout.mountConfirmed)
                         Text("Use a secure, consistent mounting orientation. LiftPod learns the repeated movement within each set.")
                             .font(.footnote)
                     }
@@ -356,7 +366,7 @@ struct WorkoutView: View {
     }
 
     private var needsSetup: Bool {
-        !workout.mountConfirmed || !workout.prescription.isValid || !workout.supportedExercise
+        !workout.prescription.isValid || !workout.supportedExercise
     }
     // The redraw timer can precede the newest sample. Read uptime at evaluation,
     // rather than comparing a fresh callback against the previous timer tick.
@@ -385,7 +395,7 @@ struct WorkoutView: View {
             return "Motion is arriving, but iOS has not identified the AirPod side. Reconnect the right AirPod."
         }
         if !signalLive { return "Waiting for AirPods motion. Bluetooth audio connection alone does not confirm a live motion stream." }
-        return workout.mountConfirmed ? "Secure the AirPod in the mount." : "Confirm your mount in workout setup."
+        return "Secure the AirPod in the mount, then start your set."
     }
     private var primaryLabel: String {
         !capture.monitoringActive ? "Connect AirPod" : (needsSetup ? "Review setup" : "Start First Set")
@@ -412,7 +422,6 @@ struct WorkoutView: View {
             }
             Text(prediction.explanation).font(.footnote).foregroundStyle(.secondary)
             HStack {
-                Text(prediction.confidence.rawValue).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button(prediction.loadLB == workout.prescription.loadLB ? "Selected" : "Use for next set") {
                     workout.use(prediction)
@@ -472,22 +481,28 @@ private struct SetReviewView: View {
                         Text("Not entered").tag(Int?.none)
                         ForEach(0...10, id: \.self) { Text("\($0)").tag(Int?.some($0)) }
                     }
-                    if let estimate = draft.automaticRIR {
+                    if let estimate = draft.automaticRIR, reps == draft.detectedReps {
                         LabeledContent("Automatic RIR",
                             value: estimate.cappedAtFourPlus ? "4+" : "\(estimate.repsInReserve)")
                         LabeledContent("Rep speed loss",
                             value: "\(estimate.velocityLossPercent.formatted(.number.precision(.fractionLength(0))))%")
+                        LabeledContent("Estimated range", value: estimate.rangeDescription)
                         LabeledContent("Model", value: estimate.method.rawValue)
-                        Text("\(estimate.confidence.rawValue). Based on \(estimate.measuredRepCount) finalized rep speeds" +
+                        Text(estimate.explanation).font(.caption).foregroundStyle(.secondary)
+                        if let error = estimate.validationMAE {
+                            LabeledContent("Personal model test error", value: "\(error.formatted(.number.precision(.fractionLength(1)))) reps")
+                        }
+                        Text("Based on \(estimate.measuredRepCount) finalized rep speeds" +
                              (estimate.calibrationSetCount > 0 ? " and \(estimate.calibrationSetCount) corrected sets." : ". Correct it when needed so the personal model can learn."))
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
-                        Text("Automatic RIR needs finalized speed data for at least three reps, including the last rep. Enter RIR if speed quality was insufficient.")
+                        Text(reps != draft.detectedReps
+                            ? "Rep count changed. Enter RIR for the corrected set."
+                            : "Automatic RIR needs consistent finalized speeds, including the last rep. You still receive rep-based load and rest suggestions.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if let rir = repsInReserve,
-                       let rest = RestRecommendation(
-                           reps: reps, repsInReserve: min(4, rir),
+                    if let rest = RestRecommendation(
+                           reps: reps, repsInReserve: repsInReserve.map { min(4, $0) },
                            velocityLossPercent: reps == draft.detectedReps
                                ? draft.velocityProfile?.velocityLossPercent : nil
                        ) {
@@ -502,6 +517,12 @@ private struct SetReviewView: View {
                         if confirm(loadLB, reps, repsInReserve) { dismiss() }
                     }.disabled(!valid)
                         .accessibilityIdentifier("confirm-workout-set")
+                }
+            }
+            .onChange(of: reps) { oldValue, _ in
+                if oldValue == draft.detectedReps,
+                   let automatic = draft.automaticRIR, repsInReserve == automatic.repsInReserve {
+                    repsInReserve = nil
                 }
             }
             .navigationTitle("Review set")
@@ -570,7 +591,7 @@ private struct LiftHalo: View {
     @State private var pulse = false
     var body: some View {
         ZStack {
-            Circle().fill(.ultraThinMaterial).overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
+            Circle().fill(.white.opacity(0.42)).overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
                 .shadow(color: LiftStyle.blue.opacity(0.07), radius: 28, y: 18)
             Circle().stroke(LiftStyle.blue.opacity(connected ? 0.12 : 0.04), lineWidth: 1).padding(15)
             Circle().fill(LiftStyle.blue.opacity(connected ? 0.035 : 0.01)).padding(42)
@@ -614,7 +635,7 @@ private struct LiftPrimaryStyle: ButtonStyle {
 
 private extension View {
     func glass(radius: CGFloat) -> some View {
-        background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius))
+        background(.white.opacity(0.55), in: RoundedRectangle(cornerRadius: radius))
             .overlay(RoundedRectangle(cornerRadius: radius).stroke(Color.primary.opacity(0.045), lineWidth: 1))
     }
 }

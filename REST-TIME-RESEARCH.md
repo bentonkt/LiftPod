@@ -81,3 +81,12 @@ estimated rep capacity on held-out sets, then personalize the 20% trigger and
 the velocity-to-rest curve. Rest should only shorten after individual data show
 that a shorter interval repeatedly preserves the target; the current research
 does not validate an automatic shortening rule.
+
+## Missing-effort fallback
+
+If neither automatic nor confirmed RIR is available, suggest 120 seconds plus
+30 seconds for 12 or more completed reps. This is a labeled rep-based heuristic;
+it does not record an invented RIR. Valid velocity loss can still raise the rest
+floor. Performance-drop adaptation requires actual RIR on both comparable sets.
+The fallback is available both before confirmation and after confirmation without
+RIR, including the set-review sheet.

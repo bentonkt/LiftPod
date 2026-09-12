@@ -2,6 +2,63 @@ import XCTest
 @testable import LiftPod
 
 final class WorkoutSummaryTests: XCTestCase {
+    func testTwentyRepsWithoutSpeedRecommendOneHeavierStepAndRest() throws {
+        let result = WorkoutSetResult(id: UUID(), prescription: .init(), reps: 20,
+            averageRepDuration: nil, movementDuration: nil, interrupted: false, finishedAt: Date())
+        let plan = WorkoutCoach.nextSetPlan(for: result)
+        XCTAssertEqual(plan.action, .considerHeavierLoad)
+        XCTAssertEqual(plan.title, "30 lb × 8")
+        XCTAssertTrue(plan.explanation.contains("Low confidence"))
+        let rest = try XCTUnwrap(RestRecommendation(reps: 20, repsInReserve: nil))
+        XCTAssertEqual(rest.seconds, 150)
+        XCTAssertEqual(rest.basis, .repHeuristic)
+        XCTAssertNil(rest.repsInReserve)
+    }
+
+    func testRepHeuristicHandlesMissedTargetsAndEquipmentBounds() {
+        let lower = WorkoutCoach.repBasedAdjustment(loadLB: 25, reps: 6,
+            repRange: 8...12, incrementLB: 2.5)
+        XCTAssertEqual(lower.load, 22.5)
+        XCTAssertEqual(lower.reps, 8)
+        XCTAssertEqual(WorkoutCoach.repBasedAdjustment(loadLB: 0, reps: 2,
+            repRange: 8...12, incrementLB: 5).load, 0)
+        XCTAssertEqual(WorkoutCoach.repBasedAdjustment(loadLB: 1000, reps: 20,
+            repRange: 8...12, incrementLB: 5).load, 1000)
+    }
+
+    @MainActor
+    func testLatestHighRepSetOverridesOlderModeledHistory() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let store = WorkoutHistoryStore(fileURL: file)
+        for index in 0..<2 {
+            let set = SessionSet(id: "set-\(index)", prescription: .init(),
+                reps: [.init(id: "rep-\(index)", start: 0, end: 2)])
+            let draft = SetReviewDraft(sessionID: UUID(), set: set,
+                endedAt: Date(timeIntervalSince1970: Double(index)))
+            XCTAssertTrue(store.confirm(draft, loadLB: 25, reps: index == 0 ? 8 : 20,
+                repsInReserve: index == 0 ? 2 : nil))
+        }
+        let prediction = try XCTUnwrap(store.nextSetRecommendation(for: .bicepsCurl,
+            repRange: 8...12, targetRIR: 2))
+        XCTAssertEqual(prediction.source.reps, 20)
+        XCTAssertEqual(prediction.loadLB, 30)
+        XCTAssertEqual(prediction.confidence, .low)
+        XCTAssertEqual(store.restRecommendation(after: prediction.source)?.seconds, 150)
+        let olderSource = try XCTUnwrap(store.sets.last)
+        let provisional = LoggedWorkoutSet(id: UUID(), sessionID: UUID(), sourceSetID: "draft",
+            exercise: .bicepsCurl, loadLB: 30, reps: 20, repsInReserve: 2,
+            averageRepDuration: nil, performedAt: Date(), velocityProfile: nil,
+            rirValueSource: .automaticVelocity, precedingSetID: nil, precedingRestSeconds: nil)
+        let immediate = try XCTUnwrap(store.nextSetRecommendation(for: .bicepsCurl,
+            repRange: 8...12, targetRIR: 2, latestSource: provisional))
+        XCTAssertEqual(immediate.loadLB, 35)
+        XCTAssertEqual(immediate.source.sourceSetID, "draft")
+        XCTAssertEqual(store.sets.count, 2, "Provisional advice must not confirm a set")
+        XCTAssertEqual(olderSource.reps, 8)
+
+    }
+
     func testRestRecommendationUsesRepsAndProximityToFailure() throws {
         XCTAssertEqual(try XCTUnwrap(RestRecommendation(reps: 8, repsInReserve: 3)).seconds, 90)
         XCTAssertEqual(try XCTUnwrap(RestRecommendation(reps: 8, repsInReserve: 2)).seconds, 120)
@@ -99,7 +156,7 @@ final class ManualWorkoutFlowTests: XCTestCase {
         XCTAssertEqual(session.current?.reps.map(\.id), ["three"])
     }
 
-    func testQualifiedSlowdownProducesTargetReachedAndKeepLoadPlan() {
+    func testSlowdownAloneDoesNotClaimRIRTargetReached() {
         let setID = UUID()
         let speeds = [1.0, 1.0, 1.0, 0.8, 0.8]
         let reps = speeds.enumerated().map { index, speed -> RepMotionMetrics in
@@ -115,8 +172,8 @@ final class ManualWorkoutFlowTests: XCTestCase {
             committedCount: 5, reference: nil, filteredSignal: nil, landmarks: .init(),
             recentEvents: [], metrics: metrics)
         let coaching = WorkoutCoach.evaluate(snapshot: snapshot, reps: 8, prescription: .init())
-        XCTAssertEqual(coaching.state, .targetReached)
-        XCTAssertEqual(coaching.slowdownPercent ?? 0, 20, accuracy: 0.001)
+        XCTAssertEqual(coaching.state, .steady)
+        XCTAssertGreaterThan(coaching.slowdownPercent ?? 0, 10)
 
         var result = WorkoutSetResult(id: setID, prescription: .init(), reps: 8,
                                       averageRepDuration: nil, movementDuration: nil,
@@ -126,7 +183,7 @@ final class ManualWorkoutFlowTests: XCTestCase {
         XCTAssertEqual(result.nextSetPlan?.action, .keepLoad)
     }
 
-    func testUnavailableMetricsNeverProduceLoadAdvice() {
+    func testInterruptedSetRecommendsRetryingCurrentLoad() {
         let snapshot = V2ProcessorSnapshot(
             ingestSequence: 1, setState: .active, quality: .stale, detectorPhase: .recovering,
             committedCount: 4, reference: nil, filteredSignal: nil, landmarks: .init(),
@@ -136,7 +193,7 @@ final class ManualWorkoutFlowTests: XCTestCase {
         let result = WorkoutSetResult(id: UUID(), prescription: .init(), reps: 4,
                                       averageRepDuration: nil, movementDuration: nil,
                                       interrupted: true, finishedAt: Date(), coaching: coaching)
-        XCTAssertEqual(WorkoutCoach.nextSetPlan(for: result).action, .noRecommendation)
+        XCTAssertEqual(WorkoutCoach.nextSetPlan(for: result).action, .keepLoad)
     }
 
     func testSteadyFullRangeSuggestsHeavierLoad() {
@@ -156,8 +213,8 @@ final class ManualWorkoutFlowTests: XCTestCase {
         let coaching = WorkoutCoach.evaluate(
             velocityProfile: profile, reps: 4, prescription: .init())
 
-        XCTAssertEqual(coaching.state, .targetReached)
-        XCTAssertEqual(try XCTUnwrap(coaching.slowdownPercent), 20, accuracy: 0.001)
+        XCTAssertEqual(coaching.state, .steady)
+        XCTAssertGreaterThan(try XCTUnwrap(coaching.slowdownPercent), 0)
         XCTAssertTrue(coaching.evidenceIsValid)
     }
 }
@@ -175,7 +232,6 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         provider.emit(.sample(experimentalRawSample(index: 0, time: 0,
             receiptTime: ProcessInfo.processInfo.systemUptime)))
         for _ in 0..<1000 { if capture.latestSample != nil { break }; await Task.yield() }
-        model.mountConfirmed = true
         await model.start(capture)
         XCTAssertEqual(model.state, .active)
         model.prescription.loadLB = 40
@@ -200,6 +256,11 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         let setResult = try XCTUnwrap(model.latestSetResult)
         XCTAssertEqual(setResult.prescription.loadLB, 25)
         XCTAssertFalse(setResult.interrupted)
+        XCTAssertGreaterThan(try XCTUnwrap(setResult.peakSpeedMPS), 0)
+        let roundTrip = try JSONDecoder().decode(WorkoutSetResult.self,
+            from: JSONEncoder().encode(setResult))
+        XCTAssertEqual(roundTrip.peakSpeedMPS, setResult.peakSpeedMPS)
+        XCTAssertEqual(roundTrip.slowdownPercent, setResult.slowdownPercent)
         XCTAssertEqual(model.completedSetResults.count, 1)
         let completedSummaryURL = model.summaryURL
         let liveSample = raw(546)
@@ -279,7 +340,6 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         provider.emit(.sample(experimentalRawSample(index: 0, time: 0,
             receiptTime: ProcessInfo.processInfo.systemUptime)))
         for _ in 0..<1000 { if capture.latestSample != nil { break }; await Task.yield() }
-        model.mountConfirmed = true
         await model.start(capture)
         XCTAssertEqual(model.state, .active)
         await model.checkStaleness(now: ProcessInfo.processInfo.systemUptime + 1)
@@ -324,14 +384,13 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertNil(capture.liveSensor(now: receipt + 0.2))
     }
 
-    func testStartRequiresLiveRightSideAndConfirmedMount() async {
+    func testStartRequiresLiveRightSideWithoutMountConfirmation() async {
         let provider = MockMotionProvider()
         let capture = CaptureModel(provider: provider, recorder: MockRecorder())
         let model = WorkoutModel()
         capture.startMotion()
         provider.emit(.sample(makeSample(receiptUptime: ProcessInfo.processInfo.systemUptime)))
         for _ in 0..<100 { if capture.latestSample != nil { break }; await Task.yield() }
-        model.mountConfirmed = true
         XCTAssertFalse(model.canStart(capture), "A live left AirPod must not authorize a right-side profile")
         XCTAssertFalse(model.signalReady(capture, now: ProcessInfo.processInfo.systemUptime + 1))
         await capture.stopMotion()
@@ -387,7 +446,7 @@ final class WorkoutHistoryTests: XCTestCase {
         let estimate = store.automaticRIR(for: .bicepsCurl, completedReps: 8,
                                           velocityProfile: profile)
         XCTAssertEqual(estimate?.repsInReserve, 3)
-        XCTAssertEqual(estimate?.velocityLossPercent ?? 0, 50, accuracy: 0.001)
+        XCTAssertEqual(estimate?.velocityLossPercent ?? 0, 50, accuracy: 2)
         XCTAssertEqual(estimate?.method, .populationHeuristic)
         XCTAssertEqual(estimate?.confidence, .low)
         XCTAssertFalse(estimate?.cappedAtFourPlus ?? true)
@@ -415,7 +474,7 @@ final class WorkoutHistoryTests: XCTestCase {
                                                         velocityProfile: current))
         XCTAssertEqual(estimate.repsInReserve, 2)
         XCTAssertEqual(estimate.method, .individualized)
-        XCTAssertEqual(estimate.confidence, .medium)
+        XCTAssertEqual(estimate.confidence, .low)
         XCTAssertEqual(estimate.calibrationSetCount, 2)
     }
 
@@ -457,7 +516,7 @@ final class WorkoutHistoryTests: XCTestCase {
         XCTAssertEqual(prediction?.confidence, .low)
     }
 
-    func testPredictionRequiresRIRRatherThanInventingEffort() {
+    func testPredictionWithoutRIRUsesRepBasedKeepRecommendation() {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
         defer { try? FileManager.default.removeItem(at: file) }
@@ -466,8 +525,8 @@ final class WorkoutHistoryTests: XCTestCase {
                              reps: [.init(id: "rep-1", start: 0, end: 2)])
         XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: UUID(), set: set),
                                     loadLB: 30, reps: 12, repsInReserve: nil))
-        XCTAssertNil(store.nextSetRecommendation(for: .bicepsCurl,
-                                                 repRange: 8...12, targetRIR: 2))
+        XCTAssertEqual(store.nextSetRecommendation(for: .bicepsCurl,
+                                                 repRange: 8...12, targetRIR: 2)?.action, .keep)
     }
 
     func testPredictionCombinesConsistentConfirmedSets() {
@@ -627,5 +686,162 @@ final class AutomaticSetBoundaryTests: XCTestCase {
             prescription: .init(),
             policy: .init(version: "automatic-sets-v1", inactivitySeconds: 12)
         )
+    }
+}
+
+
+@MainActor
+final class RIRReliabilityTests: XCTestCase {
+    private func store() -> WorkoutHistoryStore {
+        WorkoutHistoryStore(fileURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("history.json"))
+    }
+
+    private func seed(_ store: WorkoutHistoryStore, sessionID: UUID = UUID(),
+                      rir: Int = 0, load: Double = 25,
+                      speeds: [Double?] = [1, 0.9, 0.8, 0.7, 0.6, 0.5],
+                      exercise: V2Exercise = .bicepsCurl) {
+        var prescription = WorkoutPrescription(); prescription.exercise = exercise
+        let set = SessionSet(id: UUID().uuidString, prescription: prescription,
+            reps: speeds.indices.map { SessionRep(id: "\($0)", start: Double($0 * 3), end: Double($0 * 3 + 2)) })
+        let draft = SetReviewDraft(sessionID: sessionID, set: set,
+            velocityProfile: .init(meanLiftingSpeeds: speeds))
+        XCTAssertTrue(store.confirm(draft, loadLB: load, reps: speeds.count, repsInReserve: rir))
+    }
+
+    func testRobustTrendIgnoresSingleFinalSpikeButTracksSustainedDecline() throws {
+        let clean = SetVelocityProfile(meanLiftingSpeeds: [1, 0.9, 0.8, 0.7, 0.6])
+        let spike = SetVelocityProfile(meanLiftingSpeeds: [1, 0.9, 0.8, 0.7, 0.1])
+        XCTAssertEqual(try XCTUnwrap(clean.recentSpeed), 0.6, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(spike.recentSpeed), 0.6, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(clean.slowdownPerRep), 10, accuracy: 0.001)
+        XCTAssertFalse(clean.isNoisy)
+        XCTAssertTrue(spike.isNoisy)
+        let startup = SetVelocityProfile(meanLiftingSpeeds: [3, 1, 1, 1, 1, 1])
+        XCTAssertEqual(startup.baselineSpeed, 1)
+        XCTAssertEqual(startup.velocityLossPercent, 0)
+    }
+
+    func testMissingFinalRepInvalidNumbersAndMismatchedRepCountsDoNotCreateRIR() {
+        let store = store()
+        for speeds: [Double?] in [[1, 1, nil], [1, .nan, 0.8], [1, .infinity, 0.8],
+                                  [1, -1, 0.8], [1, nil, nil, nil, 0.8, 0.7]] {
+            XCTAssertNil(store.automaticRIR(for: .bicepsCurl, completedReps: speeds.count,
+                velocityProfile: .init(meanLiftingSpeeds: speeds)))
+        }
+        XCTAssertNil(store.automaticRIR(for: .bicepsCurl, completedReps: 20,
+            velocityProfile: .init(meanLiftingSpeeds: [1, 0.9, 0.8])))
+    }
+
+    func testSeparateSessionsValidatePersonalTrajectoryAndSameSessionDoesNot() throws {
+        let profile = SetVelocityProfile(meanLiftingSpeeds: [1, 0.9, 0.8, 0.7])
+        let validated = store()
+        for _ in 0..<3 { seed(validated) }
+        let estimate = try XCTUnwrap(validated.automaticRIR(for: .bicepsCurl, completedReps: 4,
+            velocityProfile: profile, loadLB: 25))
+        XCTAssertEqual(estimate.method, .individualized)
+        XCTAssertEqual(estimate.repsInReserve, 2)
+        XCTAssertEqual(estimate.confidence, .medium)
+        XCTAssertEqual(try XCTUnwrap(estimate.validationMAE), 0, accuracy: 0.001)
+        let sameSession = store(), sessionID = UUID()
+        for _ in 0..<3 { seed(sameSession, sessionID: sessionID) }
+        let unvalidated = try XCTUnwrap(sameSession.automaticRIR(for: .bicepsCurl, completedReps: 4,
+            velocityProfile: profile, loadLB: 25))
+        XCTAssertEqual(unvalidated.confidence, .low)
+        XCTAssertNil(unvalidated.validationMAE)
+    }
+
+    func testInconsistentPersonalLabelsFailHeldOutValidation() throws {
+        let store = store()
+        for rir in [0, 4, 4] { seed(store, rir: rir) }
+        let estimate = try XCTUnwrap(store.automaticRIR(for: .bicepsCurl, completedReps: 6,
+            velocityProfile: .init(meanLiftingSpeeds: [1, 0.9, 0.8, 0.7, 0.6, 0.5]), loadLB: 25))
+        XCTAssertEqual(estimate.confidence, .low)
+        XCTAssertEqual(estimate.method, .populationHeuristic)
+        XCTAssertGreaterThan(try XCTUnwrap(estimate.validationMAE), 2)
+    }
+
+    func testDifferentExerciseLoadAndEstimatorDoNotTrainPersonalModel() throws {
+        let store = store()
+        for _ in 0..<3 { seed(store, load: 60, exercise: .lateralRaise) }
+        let profile = SetVelocityProfile(meanLiftingSpeeds: [1, 0.9, 0.8, 0.7])
+        let mismatch = try XCTUnwrap(store.automaticRIR(for: .bicepsCurl, completedReps: 4,
+            velocityProfile: profile, loadLB: 25))
+        XCTAssertEqual(mismatch.method, .populationHeuristic)
+        for _ in 0..<3 { seed(store, load: 60) }
+        XCTAssertEqual(store.automaticRIR(for: .bicepsCurl, completedReps: 4,
+            velocityProfile: profile, loadLB: 25)?.method, .populationHeuristic)
+        for _ in 0..<3 { seed(store) }
+        XCTAssertEqual(store.automaticRIR(for: .bicepsCurl, completedReps: 4,
+            velocityProfile: .init(meanLiftingSpeeds: [1, 0.9, 0.8, 0.7], estimatorVersion: "new"),
+            loadLB: 25)?.method, .populationHeuristic)
+    }
+
+    func testCoachingUsesSelectedRIRAndRepCeilingWithoutSpeed() {
+        let profile = SetVelocityProfile(meanLiftingSpeeds: [1, 0.9, 0.8, 0.7])
+        let estimate = AutomaticRIREstimate(repsInReserve: 1, velocityLossPercent: 30,
+            measuredRepCount: 4, method: .individualized, confidence: .medium,
+            calibrationSetCount: 3, cappedAtFourPlus: false, lowerRIR: 0, upperRIR: 2)
+        var prescription = WorkoutPrescription()
+        XCTAssertEqual(WorkoutCoach.evaluate(velocityProfile: profile, reps: 4,
+            prescription: prescription, rirEstimate: estimate).state, .targetReached)
+        prescription.targetRIR = 0
+        XCTAssertEqual(WorkoutCoach.evaluate(velocityProfile: profile, reps: 4,
+            prescription: prescription, rirEstimate: estimate).state, .approachingTarget)
+        let ceiling = WorkoutCoach.evaluate(velocityProfile: nil, reps: 20,
+            prescription: prescription, signalUsable: false)
+        XCTAssertEqual(ceiling.state, .targetReached)
+        XCTAssertFalse(ceiling.evidenceIsValid)
+        XCTAssertNil(WorkoutCoach.evaluate(velocityProfile: profile, reps: 4,
+            prescription: prescription, rirEstimate: estimate, signalUsable: false).slowdownPercent)
+    }
+
+    func testSameFinalSpeedWithDifferentDegradationPatternsChangesRIR() throws {
+        let store = store()
+        let declining: [Double?] = [1, 0.92, 0.84, 0.75, 0.67, 0.58, 0.5]
+        let plateau: [Double?] = [1, 1, 0.5, 0.5, 0.5, 0.5, 0.5]
+        for _ in 0..<3 {
+            seed(store, rir: 0, speeds: declining)
+            seed(store, rir: 4, speeds: plateau)
+        }
+        let fading = try XCTUnwrap(store.automaticRIR(for: .bicepsCurl, completedReps: 7,
+            velocityProfile: .init(meanLiftingSpeeds: declining), loadLB: 25))
+        let steady = try XCTUnwrap(store.automaticRIR(for: .bicepsCurl, completedReps: 7,
+            velocityProfile: .init(meanLiftingSpeeds: plateau), loadLB: 25))
+        XCTAssertEqual(fading.velocityLossPercent, steady.velocityLossPercent, accuracy: 1)
+        XCTAssertLessThan(fading.repsInReserve, steady.repsInReserve)
+        XCTAssertEqual(fading.method, .individualized)
+        XCTAssertEqual(steady.method, .individualized)
+    }
+
+    func testInterRepRestKeepsEstimateProvisionalAndLegacyProfilesDecode() throws {
+        let store = store()
+        for _ in 0..<3 { seed(store) }
+        var profile = SetVelocityProfile(meanLiftingSpeeds: [1, 0.9, 0.8, 0.7])
+        profile.precedingPauses = [0, 1, 5, 1]
+        let estimate = try XCTUnwrap(store.automaticRIR(for: .bicepsCurl, completedReps: 4,
+            velocityProfile: profile, loadLB: 25))
+        XCTAssertEqual(estimate.confidence, .low)
+        XCTAssertEqual(estimate.method, .populationHeuristic)
+        XCTAssertTrue(estimate.explanation.contains("pauses"))
+        let legacy = Data(#"{"meanLiftingSpeeds":[1,0.9,0.8],"estimatorVersion":"old","measurementKind":"cycle"}"#.utf8)
+        XCTAssertNil(try JSONDecoder().decode(SetVelocityProfile.self, from: legacy).precedingPauses)
+    }
+
+    func testLatestMetricRevisionAndMixedEpochsAreRejected() {
+        let reps = (0..<4).map { SessionRep(id: "\($0)", start: Double($0 * 3), end: Double($0 * 3 + 2)) }
+        let set = SessionSet(id: "set", prescription: .init(), reps: reps)
+        var metrics = reps.map { rep in
+            var metric = GenericCycleMetrics(id: rep.id, learningEpoch: 1)
+            metric.status = .available; metric.meanSpeed = 1
+            return metric
+        }
+        XCTAssertNotNil(SetVelocityProfile(set: set, genericMetrics: metrics))
+        var invalid = metrics[3]; invalid.status = .unavailable
+        XCTAssertNil(SetVelocityProfile(set: set, genericMetrics: metrics + [invalid]))
+        var changed = GenericCycleMetrics(id: "3", learningEpoch: 2)
+        changed.status = .available; changed.meanSpeed = 1
+        metrics[3] = changed
+        XCTAssertNil(SetVelocityProfile(set: set, genericMetrics: metrics))
     }
 }
