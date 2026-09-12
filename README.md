@@ -151,3 +151,7 @@ This procedure requires real hardware and is not performed by automated tests:
 20. Verify raw rows, transaction ordering, manifest counts, frozen profile hash, replay result, and interruption handling.
 
 For testing with an AirPod outside the ear, manually disable Automatic Ear Detection in iOS Settings.
+
+## GPT end-of-set coaching
+
+The workout screen supports AI-estimated completed-set RIR, coaching notes based on compact per-rep speed summaries, and structured next-set targets. The iPhone calls OpenAI directly. See [AI coaching setup](AI_COACHING.md) to enter your API key and enable it in workout setup.

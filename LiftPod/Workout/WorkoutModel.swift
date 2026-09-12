@@ -53,6 +53,7 @@ struct WorkoutSetResult: Codable, Identifiable {
     var peakSpeedMPS: Double? = nil
     var coaching: WorkoutCoachingSnapshot? = nil
     var nextSetPlan: NextSetPlan? = nil
+    var aiAdvice: AISetAdvice? = nil
 
     var targetDescription: String {
         if interrupted { return "Interrupted — target not assessed" }
@@ -265,6 +266,11 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var sessionStartedAtUptime: Double?
     private var finalizedElapsedTime: Double?
     private var lastReceipt: Double?
+    @Published private(set) var aiLoading = false
+    @Published private(set) var aiError: String?
+    private let analyzeAI: @MainActor (AISetRequest, String, String) async throws -> AISetAdvice
+    private var aiInput: AISetRequest?
+    private var aiRequestID = UUID()
     private var finishing = false
     private var betweenSetStartedAt: Double?
     private var resultBeforePreparation: WorkoutSetResult?
@@ -272,8 +278,12 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var summaryURLBeforePreparation: URL?
 
     init(sessionDirectory: URL? = nil, historyFileURL: URL? = nil,
-         makeProfileRecorder: @escaping () -> any V2RecordingSink = { V2SessionRecorder() }) {
+         makeProfileRecorder: @escaping () -> any V2RecordingSink = { V2SessionRecorder() },
+         analyzeAI: @escaping @MainActor (AISetRequest, String, String) async throws -> AISetAdvice = {
+             try await AIWorkoutCoach().analyze($0, model: $1, apiKey: $2)
+         }) {
         self.sessionDirectory = sessionDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Workouts")
+        self.analyzeAI = analyzeAI
         self.makeProfileRecorder = makeProfileRecorder
         history = WorkoutHistoryStore(fileURL: historyFileURL)
     }
@@ -345,6 +355,11 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             error = history.error
             return false
         }
+        if completedSets.last?.id == draft.id && draft.sessionID == sessionID {
+            aiRequestID = UUID(); aiLoading = false; aiError = nil
+            latestSetResult?.aiAdvice = nil
+            if let index = completedSetResults.indices.last { completedSetResults[index].aiAdvice = nil }
+        }
         pendingSetReviews.removeAll { $0.sessionID == draft.sessionID && $0.id == draft.id }
         error = nil
         return true
@@ -372,8 +387,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func use(_ prediction: LoadPrediction) {
         guard !isRunning, session?.current == nil else { return }
-        prescription.loadLB = prediction.loadLB
-        session?.apply(.selection(prescription))
+        applyNextSet(loadLB: prediction.loadLB, reps: prediction.targetReps, rir: prediction.targetRIR)
     }
 
     var isRunning: Bool { [.preparing, .active, .finalizing].contains(state) || busy }
@@ -400,6 +414,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func startSet(_ capture: CaptureModel) async {
         guard canStart(capture) else { return }
+        aiRequestID = UUID(); aiLoading = false; aiError = nil
         busy = true
         defer { busy = false }
         resultBeforePreparation = latestSetResult
@@ -525,6 +540,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func reset() {
         guard !isRunning else { return }
+        aiRequestID = UUID(); aiLoading = false; aiError = nil; aiInput = nil
         liveRepSpeedMPS = nil; liveSpeedDegradationPercent = nil
         liveRIR = nil; cachedRIRProfile = nil; cachedRIRPrescription = nil
         state = .idle; result = nil; latestSetResult = nil; summaryURL = nil; error = nil
@@ -616,6 +632,16 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         completed.nextSetPlan = completed.interrupted ? WorkoutCoach.nextSetPlan(for: completed) :
             (loadPrediction().map { WorkoutCoach.nextSetPlan(from: $0) }
                 ?? WorkoutCoach.nextSetPlan(for: completed))
+        let profileByID = Dictionary((profileMetrics?.reps ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        let repSummaries = accepted.map { rep in
+            runningGeneric ? AIRepSummary(rep: rep, generic: genericMetrics[rep.id])
+                           : AIRepSummary(rep: rep, profile: profileByID[rep.id])
+        }
+        let degradation = completed.slowdownPercent.flatMap { $0.isFinite ? ($0 * 10).rounded() / 10 : nil }
+        aiInput = AISetRequest(prescription: frozenPrescription, reps: repSummaries,
+            speedDegradationPercent: degradation,
+            speedMeasurement: runningGeneric ? "whole-rep 3D device speed" : "lifting-phase 3D device speed",
+            signalUsable: signalUsable, interrupted: completed.interrupted)
         completedSetResults.append(completed)
         latestSetResult = completed
         betweenSetStartedAt = ProcessInfo.processInfo.systemUptime
@@ -638,6 +664,56 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             error = "The recording could not be saved."
         }
     }
+    func analyzeLatestSet(model: String, apiKey: String) async {
+        guard !isRunning, !aiLoading, let set = latestSetResult, var input = aiInput,
+              !set.interrupted, set.reps > 0 else { return }
+        let requestID = UUID()
+        aiRequestID = requestID; aiLoading = true; aiError = nil
+        if let sourceID = completedSets.last?.id,
+           let confirmed = history.sets.first(where: { $0.sessionID == sessionID && $0.sourceSetID == sourceID }) {
+            input.confirmedReps = confirmed.reps
+            input.confirmedLoadLB = confirmed.loadLB
+            if confirmed.rirValueSource == .userEntered { input.confirmedRIR = confirmed.repsInReserve }
+        }
+        defer { if aiRequestID == requestID { aiLoading = false } }
+        do {
+            let advice = try await analyzeAI(input, model, apiKey)
+            try Task.checkCancellation()
+            guard aiRequestID == requestID, latestSetResult?.id == set.id, !isRunning else { return }
+            latestSetResult?.aiAdvice = advice
+            if let index = completedSetResults.firstIndex(where: { $0.id == set.id }) {
+                completedSetResults[index].aiAdvice = advice
+            }
+            saveSession(interrupted: false, recordingDirectory: summaryURL?.deletingLastPathComponent().path)
+            if let summaryURL, let latestSetResult {
+                try JSONEncoder().encode(latestSetResult).write(to: summaryURL, options: .atomic)
+            }
+        } catch is CancellationError { }
+        catch { if aiRequestID == requestID { aiError = error.localizedDescription } }
+    }
+
+    func useAIAdvice() {
+        guard !isRunning, let set = latestSetResult, let next = set.aiAdvice?.nextSet,
+              prescription.exercise == set.prescription.exercise else { return }
+        applyNextSet(loadLB: next.loadLB, reps: next.reps, rir: next.targetRIR)
+    }
+
+    func isNextSetSelected(loadLB: Double, reps: Int, rir: Int) -> Bool {
+        prescription.loadLB == loadLB && prescription.minimumReps == reps &&
+            prescription.maximumReps == reps && prescription.targetRIR == rir
+    }
+
+    private func applyNextSet(loadLB: Double, reps: Int, rir: Int) {
+        guard !isRunning, session?.current == nil else { return }
+        var next = prescription
+        next.loadLB = loadLB
+        next.minimumReps = reps; next.maximumReps = reps
+        next.targetRIR = rir
+        guard next.isValid else { return }
+        prescription = next
+        session?.apply(.selection(next))
+    }
+
     private func saveSession(interrupted: Bool, recordingDirectory: String?) {
         guard let session, let initialPrescription else { return }
         do {

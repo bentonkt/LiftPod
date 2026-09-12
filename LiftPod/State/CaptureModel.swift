@@ -19,6 +19,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var recordingActive = false
     @Published private(set) var callbackCount: UInt64 = 0
     @Published private(set) var recordedSampleCount = 0
+    private(set) var traceSamples: [RawMotionSample] = []
     @Published private(set) var latestSample: RawMotionSample?
     @Published private(set) var latestError: String?
     @Published private(set) var completedCSVURL: URL?
@@ -51,6 +52,7 @@ final class CaptureModel: ObservableObject {
     func startMotion() {
         guard !monitoringActive else { return }
         latestError = nil
+        traceSamples.removeAll(keepingCapacity: true)
         latestSample = nil
         callbackCount = 0
         recordedSampleCount = 0
@@ -137,6 +139,12 @@ final class CaptureModel: ObservableObject {
                     _ = try? await recorder.stop()
                 }
             }
+            if let previous = traceSamples.last, sample.sourceTimestamp <= previous.sourceTimestamp {
+                traceSamples.removeAll(keepingCapacity: true)
+            }
+            traceSamples.append(sample)
+            traceSamples.removeAll { $0.sourceTimestamp < sample.sourceTimestamp - 3 }
+            if traceSamples.count > 600 { traceSamples.removeFirst(traceSamples.count - 600) }
             latestSample = sample
             refreshProviderState()
             await workoutConsumer?.ingest(sample)

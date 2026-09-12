@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1C0AC000000000000000002 /* AIWorkoutCoach.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0AC000000000000000001; };
 		047FE9A5D31328741887F04C /* ExperimentalV1TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F40C749940C625DA78416EA9 /* ExperimentalV1TestSupport.swift */; };
 		04B027484B8EBCE4521D4CC8 /* ProcessedCSVExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 161BAFCB5EE4778AE36CAA31 /* ProcessedCSVExportTests.swift */; };
 		052015A891B264170DD45267 /* ExperimentalDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53A7103A613BB4CF247C19C6 /* ExperimentalDetectorTests.swift */; };
@@ -99,6 +100,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A1C0AC000000000000000001 /* AIWorkoutCoach.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Workout/AIWorkoutCoach.swift"; sourceTree = "<group>"; };
 		0197CF8015FF8D4D19436C18 /* RawMotionCSVDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawMotionCSVDecoder.swift; sourceTree = "<group>"; };
 		048EDBE53B77DC7E613C0F56 /* GenericRepTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenericRepTypes.swift; sourceTree = "<group>"; };
 		06624E3934144C0B8783D326 /* RawMotionSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawMotionSample.swift; sourceTree = "<group>"; };
@@ -268,6 +270,7 @@
 				215055CB0485F771128546B5 /* WorkoutSession.swift */,
 				FF250F3CBFAA370372FC2895 /* WorkoutView.swift */,
 				2ED12F4F54614F337F722528 /* WorkoutModel.swift */,
+				A1C0AC000000000000000001 /* AIWorkoutCoach.swift */,
 				430F1A14F69C4BB6A256B081 /* ExperimentalV1 */,
 				B38B3867EF27D6543011DF9C /* ExperimentalV2 */,
 				32ADB041631AE80A43DB4E4F /* Model */,
@@ -464,6 +467,7 @@
 				BF559D593E98861F697655BE /* WorkoutSession.swift in Sources */,
 				5DAE61C330926D8EE46D6B02 /* WorkoutView.swift in Sources */,
 				95F00FCE8EB4FFC3F07B9811 /* WorkoutModel.swift in Sources */,
+				A1C0AC000000000000000002 /* AIWorkoutCoach.swift in Sources */,
 				F5D214B3E0A955AB01407B0D /* ContentView.swift in Sources */,
 				E770D7D5559EDC4E224F713E /* DevicePathMetrics.swift in Sources */,
 				F7E6DBDA4B0233D5DFE53C22 /* ExperimentalDetectors.swift in Sources */,

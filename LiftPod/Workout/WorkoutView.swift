@@ -1,14 +1,20 @@
 import SwiftUI
 
 private enum LiftStyle {
-    static let blue = Color(red: 49 / 255, green: 91 / 255, blue: 1)
-    static let ink = Color(red: 11 / 255, green: 11 / 255, blue: 12 / 255)
+    static let blue = Color(red: 1, green: 0.29, blue: 0.14)
+    static let ink = Color.primary
+    static let background = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.035, alpha: 1) : UIColor(white: 0.95, alpha: 1) })
+    static let panel = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.075, alpha: 1) : .white })
     static let secondary = Color(red: 107 / 255, green: 110 / 255, blue: 118 / 255)
 }
 
 struct WorkoutView: View {
     @ObservedObject var capture: CaptureModel
     @StateObject private var workout = WorkoutModel()
+    @AppStorage("aiCoachEnabled") private var aiCoachEnabled = false
+    @AppStorage("aiCoachModel") private var aiCoachModel = "gpt-4.1"
+    @State private var aiCoachAPIKey = (try? AICoachKeyStore.read()) ?? ""
+    @State private var aiKeyStatus: String?
     @State private var developerMode = false
     @State private var showingDiagnostics = false
     @State private var showingSetup = false
@@ -38,7 +44,7 @@ struct WorkoutView: View {
     private var workoutInterface: some View {
         GeometryReader { geometry in
             ScrollView {
-                VStack(spacing: 24) {
+                VStack(spacing: 20) {
                     header
                     if let result = workout.result {
                         summary(result)
@@ -49,27 +55,23 @@ struct WorkoutView: View {
                     } else {
                         ready
                     }
+                    bottomControls
+                    Text(workout.isRunning ? "TAP END SET WHEN FINISHED" : readyInstruction)
+                        .font(.system(size: 10, design: .monospaced)).tracking(0.8)
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center)
                     if let error = workout.error ?? capture.latestError {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .font(.footnote).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .padding(.horizontal, 26).padding(.top, 16).padding(.bottom, 24)
+                .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
                 .frame(minHeight: max(0, geometry.size.height - 110), alignment: .top)
             }
-            .background {
-                Color.white.ignoresSafeArea()
-                    .overlay {
-                        RadialGradient(colors: [LiftStyle.blue.opacity(0.028), .clear],
-                                       center: .init(x: 0.5, y: 0.38), startRadius: 30, endRadius: 360)
-                            .ignoresSafeArea()
-                    }
-            }
-            .safeAreaInset(edge: .bottom) { bottomControls.padding(.horizontal, 26).padding(.bottom, 12) }
+            .background(LiftStyle.background.ignoresSafeArea())
         }
         .foregroundStyle(LiftStyle.ink).tint(LiftStyle.blue)
-        .preferredColorScheme(.light)
+        .font(.system(.subheadline, design: .monospaced))
         .sheet(isPresented: $showingSetup, onDismiss: openPendingDiagnostics) { setupSheet }
         .sheet(isPresented: $showingSupport, onDismiss: openPendingDiagnostics) {
             LiftSupportView(status: statusText) { diagnosticsPending = true; showingSupport = false }
@@ -93,99 +95,100 @@ struct WorkoutView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                Button { developerMode = true } label: {
-                    Text("liftpod").font(.system(size: 15, weight: .semibold))
-                        .frame(minHeight: 44)
-                }.buttonStyle(.plain)
-                    .accessibilityLabel("Switch to developer interface")
-                    .accessibilityIdentifier("interface-toggle")
-                if workout.workoutStarted {
-                    Text("Set \(workout.completedSetResults.count + (workout.isRunning ? 1 : 0))").font(.caption)
-                }
-                if workout.workoutStarted { statusPill }
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 8) {
-                if workout.workoutStarted {
-                    Text(clock(workout.elapsedTime)).font(.system(.subheadline, design: .monospaced).weight(.semibold))
-                        .padding(.horizontal, 12).padding(.vertical, 7).glass(radius: 14)
-                        .accessibilityLabel("Workout elapsed time \(clock(workout.elapsedTime))")
-                } else {
-                    statusPill
-                }
-                Button { showingNotebook = true } label: {
-                    Image(systemName: workout.pendingSetReviews.isEmpty ? "book.closed" : "book.closed.fill")
-                        .font(.title3).frame(minWidth: 32, minHeight: 32)
-                }.accessibilityLabel("Workout notebook")
-                    .accessibilityIdentifier("workout-notebook")
-            }
-            if !workout.workoutStarted {
-                Button { showingSupport = true } label: {
-                    Image(systemName: "questionmark.circle").font(.title3).frame(minWidth: 32, minHeight: 32)
-                }.accessibilityLabel("Support")
-            }
-        }
+        HStack(spacing: 8) {
+            Button { developerMode = true } label: {
+                Text("LIFTPOD").font(.system(size: 15, weight: .bold, design: .monospaced)).tracking(2)
+            }.buttonStyle(.plain).accessibilityLabel("Switch to developer interface")
+                .accessibilityIdentifier("interface-toggle")
+            Spacer(minLength: 0)
+            HStack(spacing: 5) {
+                Circle().fill(liveSensor != nil ? LiftStyle.blue : Color.secondary).frame(width: 6, height: 6)
+                Text(liveSensor == .rightHeadphone ? "POD·R" : liveSensor == .leftHeadphone ? "POD·L" : "OFFLINE")
+                    .font(.system(size: 10, design: .monospaced)).tracking(1)
+            }.foregroundStyle(.secondary).accessibilityLabel(statusText)
+            Button { showingSetup = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 36, height: 44) }
+                .accessibilityLabel("Workout setup").accessibilityIdentifier("workout-setup")
+            Button { showingNotebook = true } label: {
+                Image(systemName: workout.pendingSetReviews.isEmpty ? "book.closed" : "book.closed.fill").frame(width: 36, height: 44)
+            }.accessibilityLabel("Workout notebook").accessibilityIdentifier("workout-notebook")
+            Button { showingSupport = true } label: { Image(systemName: "questionmark.circle").frame(width: 30, height: 44) }
+                .accessibilityLabel("Support")
+        }.foregroundStyle(.primary)
     }
 
     private var ready: some View {
-        VStack(spacing: 28) {
-            Spacer(minLength: 28)
-            LiftHalo(reps: nil, connected: signalLive)
-                .frame(maxWidth: 290).padding(.horizontal, 16)
-            Text(readyInstruction).font(.system(size: 17)).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).frame(maxWidth: 280)
-            Button { showingSetup = true } label: {
-                VStack(spacing: 6) {
-                    Text(workout.prescription.exercise.rawValue).font(.subheadline.weight(.semibold))
-                    Text("\(workout.prescription.loadLB.formatted()) lb · \(workout.prescription.minimumReps)–\(workout.prescription.maximumReps) reps · \(workout.prescription.targetRIR) RIR")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Label("Workout setup", systemImage: "slider.horizontal.3").font(.footnote)
-                }.frame(maxWidth: .infinity).padding(18).glass(radius: 22)
-            }.buttonStyle(.plain).accessibilityIdentifier("workout-setup")
-            Spacer(minLength: 12)
+        VStack(alignment: .leading, spacing: 18) {
+            MotionTraceView(samples: capture.traceSamples, streaming: liveSensor != nil)
+            repReadout(reps: 0, prescription: workout.prescription, label: "READY · NEXT SET", pace: nil)
+            RepTargetBar(reps: 0, target: workout.prescription.maximumReps)
+            Divider()
+            HStack {
+                instrumentLabel("RECENT SETS")
+                Spacer()
+                instrumentLabel("\(workout.history.sets.count) LOGGED")
+            }
+            if workout.history.sets.isEmpty {
+                Text("Your completed sets will appear here.").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 16)
+            }
+            ForEach(Array(workout.history.sets.prefix(4))) { set in
+                VStack(spacing: 10) {
+                    HStack(spacing: 8) {
+                        Text(set.performedAt, format: .dateTime.hour().minute()).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                        Text(set.exercise.rawValue).font(.system(size: 13)).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text("\(set.loadLB.formatted()) LB · \(set.reps)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                    }
+                    Divider()
+                }
+            }
         }
     }
 
     private var live: some View {
-        VStack(spacing: 26) {
-            Spacer(minLength: 20)
-            VStack(spacing: 5) {
-                Text(workout.activePrescription.exercise.rawValue.uppercased())
-                    .font(.system(size: 18, weight: .semibold)).tracking(2.2)
-                Text("\(workout.activePrescription.loadLB.formatted()) lb · target \(workout.activePrescription.minimumReps)–\(workout.activePrescription.maximumReps)")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }.multilineTextAlignment(.center)
-            LiftHalo(reps: workout.reps, connected: signalLive).frame(maxWidth: 310).padding(.horizontal, 8)
+        VStack(alignment: .leading, spacing: 18) {
+            MotionTraceView(samples: capture.traceSamples, streaming: liveSensor != nil)
+            repReadout(reps: workout.reps, prescription: workout.activePrescription,
+                       label: "COUNTING · SET \(workout.completedSetResults.count + 1)", pace: workout.currentPace)
+            RepTargetBar(reps: workout.reps, target: workout.activePrescription.maximumReps)
             HStack(spacing: 8) {
-                liveMetric("SPEED", workout.liveRepSpeedMPS.map {
-                    "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
-                } ?? "—")
-                liveMetric("DEGRADATION", workout.liveSpeedDegradationPercent.map {
-                    "\($0.formatted(.number.precision(.fractionLength(0))))%"
-                } ?? "—")
-                liveMetric("RIR", workout.liveRIRDescription ?? "—")
+                liveMetric("SPEED", workout.liveRepSpeedMPS.map { "\($0.formatted(.number.precision(.fractionLength(2)))) m/s" } ?? "—")
+                liveMetric("SPEED LOSS", workout.liveSpeedDegradationPercent.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "—")
+                liveMetric("TARGET RIR", "\(workout.activePrescription.targetRIR)")
+            }.accessibilityIdentifier("live-set-metrics")
+            Divider()
+            if workout.reps == 0 {
+                Text(workout.state == .preparing ? "Hold weight still…" : "Ready — begin lifting")
+                    .foregroundStyle(.secondary).padding(.vertical, 12)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("live-set-metrics")
-            VStack(spacing: 8) {
-                if workout.state == .preparing {
-                    Text("Hold weight still…").font(.headline).foregroundStyle(.primary)
-                    Text("Preparing the sensor").font(.footnote)
-                } else if workout.state == .finalizing {
-                    Text("Finalizing measurements…").font(.headline).foregroundStyle(.primary)
-                } else if workout.reps == 0 {
-                    Text("Ready — begin lifting").font(.headline).foregroundStyle(.primary)
-                } else {
-                    Text(workout.coaching.state.title.uppercased())
-                        .font(.system(size: 22, weight: .semibold)).tracking(1.2).foregroundStyle(.primary)
-                        .accessibilityIdentifier("workout-coaching-state")
-                    Text("Target \(workout.activePrescription.minimumReps)–\(workout.activePrescription.maximumReps) reps").font(.subheadline)
-                        .accessibilityIdentifier("workout-coaching-reason")
-                }
-            }.font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Spacer(minLength: 12)
+            Text(workout.state == .finalizing ? "FINALIZING MEASUREMENTS…" : workout.coaching.state.title.uppercased())
+                .font(.system(size: 11, design: .monospaced)).tracking(1).foregroundStyle(LiftStyle.blue)
+                .accessibilityIdentifier("workout-coaching-state")
+        }
+    }
+
+    private func instrumentLabel(_ text: String) -> some View {
+        Text(text).font(.system(size: 10, design: .monospaced)).tracking(1.2).foregroundStyle(.secondary)
+    }
+
+    private func repReadout(reps: Int, prescription: WorkoutPrescription, label: String, pace: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.system(size: 10, design: .monospaced)).tracking(1.4)
+                .foregroundStyle(workout.isRunning ? LiftStyle.blue : Color.secondary)
+            HStack(alignment: .bottom, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(String(format: "%02d", reps)).font(.system(size: 94, weight: .bold, design: .monospaced))
+                        .tracking(-7).minimumScaleFactor(0.5).lineLimit(1).contentTransition(.numericText())
+                    Text("REPS").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                }.accessibilityElement(children: .ignore).accessibilityLabel("\(reps) completed reps").accessibilityIdentifier("workout-reps")
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 7) {
+                    Text(prescription.exercise.rawValue.uppercased()).foregroundStyle(.primary)
+                    Text("\(prescription.loadLB.formatted()) LB · \(prescription.minimumReps)–\(prescription.maximumReps) REPS")
+                    Text(pace.map { "TEMPO \($0.formatted(.number.precision(.fractionLength(2)))) s" } ?? "TARGET \(prescription.targetRIR) RIR")
+                    if workout.workoutStarted { Text(clock(workout.elapsedTime)) }
+                }.font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing).padding(.bottom, 12)
+            }
         }
     }
 
@@ -212,13 +215,16 @@ struct WorkoutView: View {
 
     private func betweenSets(_ set: WorkoutSetResult) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            Spacer(minLength: 18)
-            VStack(alignment: .leading, spacing: 9) {
-                Text(set.interrupted ? "SET INTERRUPTED" : "SET \(workout.completedSetResults.count) COMPLETE")
-                    .font(.system(size: 14, weight: .semibold)).tracking(1.8).foregroundStyle(.secondary)
-                Text("\(set.reps) reps")
-                    .font(.system(size: 38, weight: .semibold)).tracking(-1)
-                setSpeedReadout(set, rir: workout.latestSetRIRDescription, showsRIR: true).font(.subheadline)
+            VStack(alignment: .leading, spacing: 12) {
+                repReadout(reps: set.reps, prescription: set.prescription,
+                           label: set.interrupted ? "SET INTERRUPTED" : "SET \(workout.completedSetResults.count) COMPLETE",
+                           pace: set.averageRepDuration)
+                RepTargetBar(reps: set.reps, target: set.prescription.maximumReps)
+                HStack {
+                    liveMetric("AI ESTIMATED RIR", set.aiAdvice?.estimatedRIR.map(String.init) ?? "—")
+                    liveMetric("CONFIDENCE", set.aiAdvice?.confidence.uppercased() ?? (workout.aiLoading ? "ANALYZING" : "UNAVAILABLE"))
+                }
+                setSpeedReadout(set, rir: set.aiAdvice?.estimatedRIR.map { "\($0) · AI estimate" } ?? (workout.aiLoading ? "Analyzing…" : "Unavailable"), showsRIR: true).font(.subheadline)
                 Text(set.targetDescription).font(.subheadline).foregroundStyle(.secondary)
             }.accessibilityIdentifier("set-result")
             HStack {
@@ -239,9 +245,10 @@ struct WorkoutView: View {
                     }.accessibilityIdentifier("recommended-rest")
                 }
             }.padding(18).glass(radius: 22)
-            if let prediction = workout.loadPrediction() {
+            aiNotes(set)
+            if set.aiAdvice?.nextSet == nil, let prediction = workout.loadPrediction() {
                 nextSetCard(prediction)
-            } else if let plan = set.nextSetPlan {
+            } else if set.aiAdvice?.nextSet == nil, let plan = set.nextSetPlan {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("NEXT SET").font(.caption.weight(.semibold)).tracking(1.6).foregroundStyle(.secondary)
                     Text(plan.title).font(.system(size: 24, weight: .semibold))
@@ -251,6 +258,59 @@ struct WorkoutView: View {
             }
             Spacer(minLength: 12)
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func aiNotes(_ set: WorkoutSetResult) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("AI COACH NOTES").font(.caption.weight(.semibold)).tracking(1.4)
+            if let advice = set.aiAdvice {
+                Text(advice.notes).textSelection(.enabled)
+                ForEach(advice.validationWarnings ?? [], id: \.self) { warning in
+                    Label(warning, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
+                }
+                Text("\(advice.confidence.capitalized) confidence").font(.caption).foregroundStyle(.secondary)
+                ForEach(Array(advice.weakPoints.enumerated()), id: \.offset) { _, point in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Rep \(point.rep)")
+                            .font(.caption.weight(.semibold))
+                        Text(point.observation).font(.subheadline)
+                        Text(point.cue).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                if let next = advice.nextSet {
+                    Divider()
+                    Text("NEXT SET · AI SUGGESTION").font(.caption.weight(.semibold))
+                    Text("\(next.loadLB.formatted()) lb × \(next.reps) · \(next.targetRIR) RIR")
+                        .font(.title3.weight(.semibold))
+                    Button(workout.isNextSetSelected(loadLB: next.loadLB, reps: next.reps, rir: next.targetRIR) ? "Selected" : "Use next set") {
+                        workout.useAIAdvice()
+                    }.buttonStyle(.bordered)
+                        .disabled(workout.prescription.exercise != set.prescription.exercise || workout.isNextSetSelected(loadLB: next.loadLB, reps: next.reps, rir: next.targetRIR))
+                    if workout.prescription.exercise != set.prescription.exercise {
+                        Text("This suggestion is for \(set.prescription.exercise.rawValue).").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            } else if workout.aiLoading {
+                ProgressView("Analyzing your set…")
+            } else if set.interrupted || set.reps == 0 {
+                Text("AI analysis unavailable for an interrupted or empty set.").foregroundStyle(.secondary)
+            } else if !aiCoachEnabled {
+                Text("Enable AI coaching in setup to analyze rep speeds and estimate RIR.").foregroundStyle(.secondary)
+            }
+            if let error = workout.aiError { Text(error).font(.footnote).foregroundStyle(.secondary) }
+            if aiCoachEnabled && !workout.aiLoading && !set.interrupted && set.reps > 0 {
+                Button(set.aiAdvice == nil ? "Analyze set" : "Refresh analysis") {
+                    Task { await workout.analyzeLatestSet(model: aiCoachModel, apiKey: aiCoachAPIKey) }
+                }.buttonStyle(.bordered)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(22).glass(radius: 24)
+        .accessibilityIdentifier("ai-coach-notes")
+        .task(id: "\(set.id)-\(aiCoachEnabled)") {
+            if aiCoachEnabled && set.aiAdvice == nil {
+                await workout.analyzeLatestSet(model: aiCoachModel, apiKey: aiCoachAPIKey)
+            }
+        }
     }
 
     private func setSpeedReadout(_ set: WorkoutSetResult, rir: String? = nil,
@@ -328,6 +388,13 @@ struct WorkoutView: View {
             }
         } else if workout.latestSetResult != nil {
             VStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    instrumentLabel("NEXT SET · SELECTED")
+                    Text(workout.prescription.exercise.rawValue)
+                    Text("\(workout.prescription.loadLB.formatted()) lb × \(workout.prescription.minimumReps == workout.prescription.maximumReps ? String(workout.prescription.maximumReps) : "\(workout.prescription.minimumReps)–\(workout.prescription.maximumReps)") · \(workout.prescription.targetRIR) RIR")
+                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(16).glass(radius: 14)
+                    .accessibilityIdentifier("selected-next-set")
                 if workout.state != .interrupted {
                     Button("Start Next Set") { Task { await workout.startSet(capture) } }
                         .buttonStyle(LiftPrimaryStyle()).accessibilityIdentifier("start-next-set")
@@ -366,6 +433,23 @@ struct WorkoutView: View {
                         TextField("Load", value: $workout.prescription.loadLB, format: .number)
                             .keyboardType(.decimalPad).multilineTextAlignment(.trailing).accessibilityIdentifier("workout-load")
                     }
+                }
+                Section {
+                    Toggle("AI coaching", isOn: $aiCoachEnabled)
+                    SecureField("OpenAI API key", text: $aiCoachAPIKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("Save API key on this iPhone") {
+                        do {
+                            try AICoachKeyStore.save(aiCoachAPIKey)
+                            aiKeyStatus = aiCoachAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? "Saved key removed." : "API key saved."
+                        } catch { aiKeyStatus = error.localizedDescription }
+                    }
+                    if let aiKeyStatus { Text(aiKeyStatus).font(.footnote).foregroundStyle(.secondary) }
+                    TextField("GPT model", text: $aiCoachModel)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                } header: { Text("AI coach") } footer: {
+                    Text("When enabled, each completed set sends exercise, weight, targets, rep speeds, durations and speed loss directly to OpenAI. No separate server is needed. RIR is an AI estimate. Clear the key and save to remove it from this iPhone.")
                 }
                 Section("Planning") {
                     Picker("Goal", selection: $workout.prescription.goal) {
@@ -476,11 +560,11 @@ struct WorkoutView: View {
             Text(prediction.action == .increase ? "Try one step heavier" : prediction.action == .decrease ? "Try one step lighter" : "Keep this weight").font(.footnote).foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button(prediction.loadLB == workout.prescription.loadLB ? "Selected" : "Use next set") {
+                Button(workout.isNextSetSelected(loadLB: prediction.loadLB, reps: prediction.targetReps, rir: prediction.targetRIR) ? "Selected" : "Use next set") {
                     workout.use(prediction)
                 }
                 .font(.subheadline.weight(.semibold))
-                .disabled(prediction.loadLB == workout.prescription.loadLB)
+                .disabled(workout.isNextSetSelected(loadLB: prediction.loadLB, reps: prediction.targetReps, rir: prediction.targetRIR))
             }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 22)
@@ -628,59 +712,107 @@ private struct WorkoutNotebookView: View {
     }
 }
 
-private struct LiftHalo: View {
-    let reps: Int?
-    let connected: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulse = false
-    var body: some View {
-        ZStack {
-            Circle().fill(.white.opacity(0.42)).overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
-                .shadow(color: LiftStyle.blue.opacity(0.07), radius: 28, y: 18)
-            Circle().stroke(LiftStyle.blue.opacity(connected ? 0.12 : 0.04), lineWidth: 1).padding(15)
-            Circle().fill(LiftStyle.blue.opacity(connected ? 0.035 : 0.01)).padding(42)
-            Circle().stroke(connected ? LiftStyle.blue.opacity(0.45) : Color.secondary.opacity(0.18), lineWidth: 1.5)
-                .padding(28).scaleEffect(pulse ? 1.055 : 1)
-            if let reps {
-                VStack(spacing: 2) {
-                    Text("\(reps)").font(.system(size: 112, weight: .medium, design: .default)).tracking(-5)
-                        .monospacedDigit().minimumScaleFactor(0.5).lineLimit(1).contentTransition(.numericText())
-                    Text("REPS").font(.system(size: 12, weight: .semibold)).tracking(2.3).foregroundStyle(.secondary)
-                }.padding(45).accessibilityElement(children: .ignore).accessibilityLabel("\(reps) completed reps")
-                    .accessibilityIdentifier("workout-reps")
-            } else {
-                VStack(spacing: 14) {
-                    Circle().stroke(LiftStyle.blue.opacity(0.6), lineWidth: 1.5).frame(width: 14, height: 14)
-                    Image(systemName: "dumbbell.fill").font(.system(size: 66, weight: .regular))
-                }.offset(y: -10).accessibilityHidden(true)
-            }
-        }.aspectRatio(1, contentMode: .fit)
-        .task(id: reps) {
-            guard !reduceMotion, let reps, reps > 0 else { return }
-            withAnimation(.easeOut(duration: 0.2)) { pulse = true }
-            try? await Task.sleep(for: .milliseconds(220))
-            withAnimation(.easeOut(duration: 0.4)) { pulse = false }
-        }
-    }
-}
-
 private struct LiftPrimaryStyle: ButtonStyle {
     var secondary = false
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var scheme
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 17, weight: .semibold))
-            .frame(maxWidth: .infinity).frame(minHeight: 56)
-            .foregroundStyle(enabled ? (secondary ? Color.primary : .white) : Color.secondary)
-            .background(enabled ? (secondary ? Color(.secondarySystemBackground).opacity(0.8) : LiftStyle.blue.opacity(configuration.isPressed ? 0.8 : 0.94)) : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 19))
-            .overlay(RoundedRectangle(cornerRadius: 19).stroke(.white.opacity(0.25), lineWidth: 1))
-            .shadow(color: enabled && !secondary ? LiftStyle.blue.opacity(0.18) : .clear, radius: 12, y: 6)
+        configuration.label.textCase(.uppercase)
+            .font(.system(size: secondary ? 11 : 16, weight: .bold, design: .monospaced)).tracking(secondary ? 0.6 : 2)
+            .frame(maxWidth: .infinity).frame(minHeight: secondary ? 46 : 58)
+            .foregroundStyle(secondary ? Color.primary : scheme == .dark ? Color.black : Color.white)
+            .background(secondary ? Color.clear : scheme == .dark ? LiftStyle.blue : Color(white: 0.04), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(secondary ? 0.2 : 0), lineWidth: 1))
+            .opacity(!enabled ? 0.35 : configuration.isPressed ? 0.7 : 1)
     }
 }
 
 private extension View {
     func glass(radius: CGFloat) -> some View {
-        background(.white.opacity(0.55), in: RoundedRectangle(cornerRadius: radius))
-            .overlay(RoundedRectangle(cornerRadius: radius).stroke(Color.primary.opacity(0.045), lineWidth: 1))
+        background(LiftStyle.panel, in: RoundedRectangle(cornerRadius: min(radius, 14)))
+            .overlay(RoundedRectangle(cornerRadius: min(radius, 14)).stroke(Color.primary.opacity(0.12), lineWidth: 1))
+    }
+}
+
+/// Excess reps overwrite the completed target, starting at the left edge.
+struct RepTargetProgress: Equatable {
+    let reps: Int
+    let target: Int
+    var segmentCount: Int { max(1, target) }
+    var completed: Int { min(max(0, reps), segmentCount) }
+    var overflow: Int { min(max(0, reps - segmentCount), segmentCount) }
+}
+
+struct RepTargetBar: View {
+    let reps: Int
+    let target: Int
+    var body: some View {
+        let progress = RepTargetProgress(reps: reps, target: target)
+        Canvas { context, size in
+            let gap = min(3.0, size.width / Double(progress.segmentCount) * 0.2)
+            let width = (size.width - gap * Double(progress.segmentCount - 1)) / Double(progress.segmentCount)
+            for index in 0..<progress.segmentCount {
+                let rect = CGRect(x: Double(index) * (width + gap), y: 0, width: width, height: size.height)
+                let color: Color = index < progress.overflow ? .purple : index < progress.completed ? LiftStyle.blue : .primary.opacity(0.15)
+                context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(color))
+            }
+        }.frame(height: 5).padding(.vertical, 3)
+            .accessibilityLabel("\(reps) of \(max(1, target)) target reps, \(max(0, reps - max(1, target))) extra reps")
+            .accessibilityIdentifier("rep-target-bar")
+    }
+}
+
+private struct MotionTraceView: View {
+    let samples: [RawMotionSample]
+    let streaming: Bool
+    private var points: [(Double, Double)] {
+        samples.compactMap { sample in
+            let x = sample.userAccelerationX + sample.gravityX
+            let y = sample.userAccelerationY + sample.gravityY
+            let z = sample.userAccelerationZ + sample.gravityZ
+            let magnitude = sqrt(x*x + y*y + z*z)
+            return magnitude.isFinite ? (sample.sourceTimestamp, magnitude) : nil
+        }
+    }
+    var body: some View {
+        let values = points
+        let rms = values.isEmpty ? nil : sqrt(values.map { $0.1 * $0.1 }.reduce(0, +) / Double(values.count))
+        VStack(spacing: 6) {
+            HStack {
+                Text("ACCEL MAGNITUDE · IMU")
+                Spacer(minLength: 4)
+                Text(streaming ? "LIVE" : "IDLE")
+            }.font(.system(size: 9, design: .monospaced)).tracking(1).foregroundStyle(.secondary)
+            ZStack(alignment: .topTrailing) {
+                Canvas { context, size in
+                    for fraction in [0.0, 0.5, 1.0] {
+                        var line = Path(); line.move(to: CGPoint(x: 0, y: size.height * fraction)); line.addLine(to: CGPoint(x: size.width, y: size.height * fraction))
+                        context.stroke(line, with: .color(.primary.opacity(0.09)), lineWidth: 0.5)
+                    }
+                    guard values.count > 1, let end = values.last?.0 else { return }
+                    let low = min(0.8, (values.map(\.1).min() ?? 0.8) - 0.05)
+                    let high = max(1.2, (values.map(\.1).max() ?? 1.2) + 0.05)
+                    var trace = Path()
+                    for (index, point) in values.enumerated() {
+                        let position = CGPoint(x: max(0, (point.0 - end + 3) / 3) * size.width, y: size.height * (1 - (point.1 - low) / (high - low)))
+                        if index == 0 { trace.move(to: position) } else { trace.addLine(to: position) }
+                    }
+                    context.stroke(trace, with: .color(LiftStyle.blue.opacity(streaming ? 1 : 0.4)), style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
+                }
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(streaming ? rms.map { $0.formatted(.number.precision(.fractionLength(3))) } ?? "—" : "—")
+                        .font(.system(size: 25, weight: .semibold, design: .monospaced))
+                    Text("g RMS").font(.system(size: 9, design: .monospaced)).tracking(1).foregroundStyle(.secondary)
+                }.padding(4).background(LiftStyle.panel.opacity(0.9))
+                if values.isEmpty {
+                    Text("WAITING FOR MOTION").font(.system(size: 10, design: .monospaced)).tracking(1)
+                        .foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }.frame(height: 110)
+            HStack { Text("−3.0s"); Spacer(); Text("−2.0s"); Spacer(); Text("−1.0s"); Spacer(); Text("NOW") }
+                .font(.system(size: 9, design: .monospaced)).tracking(1).foregroundStyle(.tertiary)
+        }.padding(13).glass(radius: 16)
+            .accessibilityElement(children: .ignore).accessibilityLabel(streaming ? "Live acceleration graph, \(rms?.formatted() ?? "unknown") g RMS" : "Motion graph idle")
     }
 }
 
