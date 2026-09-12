@@ -186,3 +186,15 @@ A 2020 paper titled *Estimating Repetitions in Reserve in Four Commonly Used Res
 The present model is a better population prior, not a finished personalized predictor. Evaluate each prediction against the next user-confirmed load at the same exercise, rep target, and RIR. Report median absolute error in pounds, accuracy within one equipment increment, signed error to detect unsafe overprediction, calibration by confidence level, and results by exercise and training experience.
 
 Once speed metrics are available, fit an individualized RIR–velocity relationship per exercise. Use that signal to adjust or replace subjective RIR only after repeated-session validation shows lower held-out error. Until then, the app keeps the estimate optional and requires confirmation.
+
+## Missing-data fallback
+
+A completed set now always supplies a concrete load and rep target, including
+before review. The newest unreviewed set is transient prediction input; it does
+not enter confirmed history until review. When RIR is missing, the load is below
+the capacity curve's domain, or effective reps exceed 15, use bounded double
+progression: above the rep range, add one configured equipment increment and aim
+for the bottom of the range; below it, subtract one increment; inside it, keep
+the load. Clamp load to 0–1,000 lb. Label this low-confidence rep-based advice.
+Interrupted or empty sets explicitly recommend retrying the current load.
+This fallback supersedes abstention for missing effort and out-of-domain sets.

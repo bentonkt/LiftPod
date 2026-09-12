@@ -49,6 +49,8 @@ struct WorkoutSetResult: Codable, Identifiable {
     let interrupted: Bool
     let finishedAt: Date
     var slowdownPercent: Double? = nil
+    /// Maximum available instantaneous rep speed, in metres per second.
+    var peakSpeedMPS: Double? = nil
     var coaching: WorkoutCoachingSnapshot? = nil
     var nextSetPlan: NextSetPlan? = nil
 
@@ -102,62 +104,52 @@ struct NextSetPlan: Codable, Equatable {
 enum WorkoutCoach {
     static func evaluate(snapshot: V2ProcessorSnapshot, reps: Int,
                          prescription: WorkoutPrescription) -> WorkoutCoachingSnapshot {
-        guard snapshot.quality == .usable, snapshot.isRecovering != true else {
-            return .init(state: .unavailable, slowdownPercent: nil,
-                         explanation: snapshot.qualityDetail ?? "The motion signal is not reliable enough for coaching.",
-                         evidenceIsValid: false)
+        let profile = snapshot.metrics.map { metrics in
+            SetVelocityProfile(meanLiftingSpeeds: metrics.reps.map {
+                $0.status == .available ? $0.meanLiftingSpeed : nil
+            })
         }
-        guard let metrics = snapshot.metrics, let baseline = metrics.baselineMeanLiftingSpeed,
-              baseline.isFinite, baseline > 0 else {
-            return .init(state: .buildingBaseline, slowdownPercent: nil,
-                         explanation: "Complete three smooth reps to establish your baseline.",
-                         evidenceIsValid: false)
-        }
-        let qualified = metrics.reps.filter { $0.status == .available }
-            .compactMap { metrics.slowdownPercent(for: $0) }.filter(\.isFinite)
-        guard !qualified.isEmpty else {
-            return .init(state: .buildingBaseline, slowdownPercent: nil,
-                         explanation: "Waiting for a qualified rep measurement.", evidenceIsValid: false)
-        }
-        let recent = qualified.suffix(2)
-        let smoothed = recent.reduce(0, +) / Double(recent.count)
-        if reps >= prescription.maximumReps {
-            return .init(state: .targetReached, slowdownPercent: smoothed,
-                         explanation: "You reached the top of your target range.", evidenceIsValid: true)
-        }
-        if smoothed >= 19.5 {
-            return .init(state: .targetReached, slowdownPercent: smoothed,
-                         explanation: "Recent reps are \(rounded(smoothed))% slower than your baseline.", evidenceIsValid: true)
-        }
-        if smoothed >= 12 {
-            return .init(state: .approachingTarget, slowdownPercent: smoothed,
-                         explanation: "Recent reps are \(rounded(smoothed))% slower than your baseline.", evidenceIsValid: true)
-        }
-        return .init(state: .steady, slowdownPercent: smoothed,
-                     explanation: "Recent reps remain near your baseline.", evidenceIsValid: true)
+        return evaluate(velocityProfile: profile, reps: reps, prescription: prescription,
+                        signalUsable: snapshot.quality == .usable && snapshot.isRecovering != true)
     }
 
     static func nextSetPlan(for result: WorkoutSetResult) -> NextSetPlan {
-        guard !result.interrupted, let coaching = result.coaching, coaching.evidenceIsValid else {
-            return .init(action: .noRecommendation, title: "No load recommendation",
-                         explanation: "Keep your current setup and verify the next set from a clean signal.")
+        let prescription = result.prescription
+        let fallback = repBasedAdjustment(loadLB: prescription.loadLB, reps: result.reps,
+            repRange: prescription.minimumReps...prescription.maximumReps,
+            incrementLB: prescription.equipmentIncrementLB,
+            interrupted: result.interrupted,
+            steadyAtTop: result.coaching?.evidenceIsValid == true &&
+                (result.coaching?.slowdownPercent ?? .infinity) < 12)
+        let action: NextSetAction = fallback.load > prescription.loadLB ? .considerHeavierLoad :
+            (fallback.load < prescription.loadLB ? .lowerLoad : .keepLoad)
+        return .init(action: action,
+                     title: "\(fallback.load.formatted()) lb × \(fallback.reps)",
+                     explanation: fallback.explanation)
+    }
+
+    /// Bounded double progression when a calibrated capacity estimate is unavailable.
+    static func repBasedAdjustment(loadLB: Double, reps: Int, repRange: ClosedRange<Int>,
+                                   incrementLB: Double, interrupted: Bool = false,
+                                   steadyAtTop: Bool = false)
+        -> (load: Double, reps: Int, explanation: String) {
+        let direction = interrupted || reps <= 0 ? 0 :
+            (reps > repRange.upperBound || (reps == repRange.upperBound && steadyAtTop) ? 1 :
+                (reps < repRange.lowerBound ? -1 : 0))
+        let load = min(1000, max(0, loadLB + Double(direction) * incrementLB))
+        let target = direction > 0 ? repRange.lowerBound :
+            min(repRange.upperBound, max(repRange.lowerBound, reps))
+        let reason: String
+        if interrupted || reps <= 0 {
+            reason = "The set was incomplete. Keep the current load and retry the rep target."
+        } else if load > loadLB {
+            reason = "\(reps) reps reached or exceeded your \(repRange.lowerBound)–\(repRange.upperBound) target. Try one heavier equipment step and aim for \(target) reps."
+        } else if load < loadLB {
+            reason = "\(reps) reps fell below your \(repRange.lowerBound)–\(repRange.upperBound) target. Try one lighter equipment step."
+        } else {
+            reason = "Keep this load and aim for \(target) reps within your \(repRange.lowerBound)–\(repRange.upperBound) target."
         }
-        if result.reps >= result.prescription.maximumReps,
-           let slowdown = coaching.slowdownPercent, slowdown < 12 {
-            return .init(action: .considerHeavierLoad, title: "Consider a heavier load",
-                         explanation: "You completed the full range while your qualified reps stayed steady.")
-        }
-        if coaching.state == .targetReached && result.reps < result.prescription.minimumReps {
-            return .init(action: .lowerLoad, title: "Use a lighter load",
-                         explanation: "Your slowdown target arrived before \(result.prescription.minimumReps) reps.")
-        }
-        if coaching.state == .targetReached && result.reps <= result.prescription.maximumReps {
-            return .init(action: .keepLoad,
-                         title: "Keep \(result.prescription.loadLB.formatted()) lb",
-                         explanation: "You reached the target inside your rep range.")
-        }
-        return .init(action: .noRecommendation, title: "Keep the plan for now",
-                     explanation: "This set did not provide enough evidence for a load change.")
+        return (load, target, "Low confidence · Rep-based heuristic. " + reason)
     }
 
     static func nextSetPlan(from prediction: LoadPrediction) -> NextSetPlan {
@@ -174,29 +166,39 @@ enum WorkoutCoach {
     private static func rounded(_ value: Double) -> Int { Int(value.rounded()) }
 
     static func evaluate(velocityProfile: SetVelocityProfile?, reps: Int,
-                         prescription: WorkoutPrescription) -> WorkoutCoachingSnapshot {
-        guard let velocityProfile, let slowdown = velocityProfile.velocityLossPercent else {
-            return .init(state: .buildingBaseline, slowdownPercent: nil,
-                         explanation: "Complete three smooth reps to establish your baseline.",
-                         evidenceIsValid: false)
-        }
+                         prescription: WorkoutPrescription,
+                         rirEstimate: AutomaticRIREstimate? = nil,
+                         signalUsable: Bool = true) -> WorkoutCoachingSnapshot {
+        let slowdown = signalUsable ? velocityProfile?.velocityLossPercent : nil
         if reps >= prescription.maximumReps {
             return .init(state: .targetReached, slowdownPercent: slowdown,
-                         explanation: "You reached the top of your target range.", evidenceIsValid: true)
+                         explanation: "You reached the top of your rep range.",
+                         evidenceIsValid: slowdown != nil)
         }
-        if slowdown >= 19.5 {
-            return .init(state: .targetReached, slowdownPercent: slowdown,
-                         explanation: "Recent reps are \(rounded(slowdown))% slower than your baseline.",
-                         evidenceIsValid: true)
+        guard signalUsable else {
+            return .init(state: .unavailable, slowdownPercent: nil,
+                         explanation: "Speed signal is recovering. Rep target: \(prescription.minimumReps)–\(prescription.maximumReps).",
+                         evidenceIsValid: false)
         }
-        if slowdown >= 12 {
-            return .init(state: .approachingTarget, slowdownPercent: slowdown,
-                         explanation: "Recent reps are \(rounded(slowdown))% slower than your baseline.",
-                         evidenceIsValid: true)
+        guard let slowdown else {
+            return .init(state: reps < 3 ? .buildingBaseline : .steady, slowdownPercent: nil,
+                         explanation: "\(reps) reps completed; aim for \(prescription.minimumReps)–\(prescription.maximumReps). Waiting for consistent finalized speeds.",
+                         evidenceIsValid: false)
+        }
+        if let estimate = rirEstimate {
+            let reached = estimate.upperRIR <= prescription.targetRIR && estimate.upperRIR < 4
+            let approaching = estimate.lowerRIR <= prescription.targetRIR + 1
+            return .init(state: reached ? .targetReached : (approaching ? .approachingTarget : .steady),
+                slowdownPercent: slowdown,
+                explanation: "Estimated \(estimate.rangeDescription) RIR · target \(prescription.targetRIR). " +
+                    (reached ? "Finish this set." : "\(rounded(slowdown))% speed loss. \(estimate.confidence.rawValue)."),
+                evidenceIsValid: true)
         }
         return .init(state: .steady, slowdownPercent: slowdown,
-                     explanation: "Recent reps remain near your baseline.", evidenceIsValid: true)
+                     explanation: "\(rounded(slowdown))% speed loss. Aim for \(prescription.minimumReps)–\(prescription.maximumReps) reps; slowdown alone does not establish RIR.",
+                     evidenceIsValid: true)
     }
+
 }
 
 /// Retains accepted events across the detector's rolling 12-event snapshot.
@@ -223,7 +225,6 @@ struct WorkoutRepLedger {
 final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     @Published var prescription = WorkoutPrescription()
     @Published var countingMode: RepCountingMode = .generic
-    @Published var mountConfirmed = false
     @Published private(set) var state: V2SetState = .idle
     @Published private(set) var reps = 0
     @Published private(set) var busy = false
@@ -234,6 +235,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     @Published private(set) var coaching = WorkoutCoachingSnapshot(
         state: .buildingBaseline, slowdownPercent: nil,
         explanation: "Complete three smooth reps to establish your baseline.", evidenceIsValid: false)
+    @Published private(set) var liveRIR: AutomaticRIREstimate?
     @Published private(set) var summaryURL: URL?
 
     @Published private(set) var session: WorkoutSessionReducer?
@@ -252,6 +254,9 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var genericMetrics: [String: GenericCycleMetrics] = [:]
     private var profileLedger = WorkoutRepLedger()
     private var profileMetrics: RepMetricsSnapshot?
+    private var cachedRIRProfile: SetVelocityProfile?
+    private var cachedRIRHistoryCount = -1
+    private var cachedRIRPrescription: WorkoutPrescription?
     private var firstSourceTime: Double?
     private var latestSourceTime: Double?
     private var startedAtUptime: Double = 0
@@ -292,10 +297,9 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         }) {
             return history.restRecommendation(after: confirmed)
         }
-        guard let draft = pendingSetReviews.first(where: { $0.id == sourceSetID }),
-              let estimate = draft.automaticRIR else { return nil }
+        guard let draft = pendingSetReviews.first(where: { $0.id == sourceSetID }) else { return nil }
         return RestRecommendation(reps: draft.detectedReps,
-                                  repsInReserve: estimate.repsInReserve,
+                                  repsInReserve: draft.automaticRIR?.repsInReserve,
                                   velocityLossPercent: draft.velocityProfile?.velocityLossPercent)
     }
 
@@ -327,10 +331,23 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
 
     func loadPrediction() -> LoadPrediction? {
-        history.nextSetRecommendation(for: prescription.exercise,
+        if latestSetResult?.interrupted == true { return nil }
+        let draft = completedSets.last.flatMap { latest in
+            pendingSetReviews.first { $0.id == latest.id && $0.exercise == prescription.exercise }
+        }
+        let source = draft.map {
+            LoggedWorkoutSet(id: UUID(), sessionID: $0.sessionID, sourceSetID: $0.id,
+                exercise: $0.exercise, loadLB: $0.loadLB, reps: $0.detectedReps,
+                repsInReserve: $0.automaticRIR?.repsInReserve,
+                averageRepDuration: $0.averageRepDuration, performedAt: $0.endedAt,
+                velocityProfile: $0.velocityProfile,
+                rirValueSource: $0.automaticRIR == nil ? nil : .automaticVelocity,
+                precedingSetID: $0.precedingSetID, precedingRestSeconds: $0.precedingRestSeconds)
+        }
+        return history.nextSetRecommendation(for: prescription.exercise,
             repRange: prescription.minimumReps...prescription.maximumReps,
             targetRIR: prescription.targetRIR,
-            incrementLB: prescription.equipmentIncrementLB)
+            incrementLB: prescription.equipmentIncrementLB, latestSource: source)
     }
 
     func use(_ prediction: LoadPrediction) {
@@ -357,7 +374,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
 
     func canStart(_ capture: CaptureModel) -> Bool {
-        !isRunning && prescription.isValid && supportedExercise && mountConfirmed &&
+        !isRunning && prescription.isValid && supportedExercise &&
         !capture.recordingActive && signalReady(capture)
     }
 
@@ -371,6 +388,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         error = nil; result = nil; summaryURL = nil; latestSetResult = nil
         genericEventIDs = []; genericMetrics = [:]; profileLedger = .init(); profileMetrics = nil
         reps = 0; lastReceipt = nil; betweenSetStartedAt = nil
+        liveRIR = nil; cachedRIRProfile = nil; cachedRIRPrescription = nil
         frozenPrescription = prescription
         if session == nil {
             sessionID = UUID()
@@ -396,7 +414,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
                 try await profileEngine.start(profile: selectedProfile,
                     recorder: makeProfileRecorder(), motionActive: capture.motionUpdatesActive,
                     sideVerified: true, noOtherRecording: !capture.recordingActive,
-                    setupConfirmed: mountConfirmed, metricsConfiguration: .cyclicDevicePath3D)
+                    setupConfirmed: true, metricsConfiguration: .cyclicDevicePath3D)
                 runningGeneric = false
             } else {
                 throw V2Error.invalidLifecycle("No bundled profile is available for this exercise. Use Generic movement.")
@@ -486,6 +504,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func reset() {
         guard !isRunning else { return }
+        liveRIR = nil; cachedRIRProfile = nil; cachedRIRPrescription = nil
         state = .idle; result = nil; latestSetResult = nil; summaryURL = nil; error = nil
         reps = 0; session = nil; sessionURL = nil; completedSetResults = []; initialPrescription = nil
         frozenPrescription = nil; betweenSetStartedAt = nil; sessionStartedAtUptime = nil
@@ -519,16 +538,25 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             for event in newEvents { session?.apply(.rep(SessionRep(event))) }
         }
         reps = session?.current?.reps.count ?? 0
-        if runningGeneric {
-            let velocity = session?.current.flatMap {
-                SetVelocityProfile(set: $0, genericMetrics: Array(genericMetrics.values))
-            }
-            coaching = WorkoutCoach.evaluate(velocityProfile: velocity, reps: reps,
-                                             prescription: frozenPrescription ?? prescription)
-        } else {
-            coaching = WorkoutCoach.evaluate(snapshot: snapshot, reps: reps,
-                                             prescription: frozenPrescription ?? prescription)
+        let currentPrescription = frozenPrescription ?? prescription
+        let velocity = session?.current.flatMap {
+            runningGeneric ? SetVelocityProfile(set: $0, genericMetrics: Array(genericMetrics.values)) :
+                SetVelocityProfile(set: $0, metrics: profileMetrics)
         }
+        let signalUsable = snapshot.quality == .usable && snapshot.isRecovering != true
+        if velocity != cachedRIRProfile || cachedRIRHistoryCount != history.sets.count ||
+            cachedRIRPrescription != currentPrescription {
+            liveRIR = velocity.flatMap {
+                history.automaticRIR(for: currentPrescription.exercise, completedReps: reps,
+                    velocityProfile: $0, loadLB: currentPrescription.loadLB)
+            }
+            cachedRIRProfile = velocity
+            cachedRIRHistoryCount = history.sets.count
+            cachedRIRPrescription = currentPrescription
+        }
+        coaching = WorkoutCoach.evaluate(velocityProfile: velocity, reps: reps,
+            prescription: currentPrescription, rirEstimate: signalUsable ? liveRIR : nil,
+            signalUsable: signalUsable)
         state = snapshot.setState
         if state == .interrupted {
             coaching = .init(state: .unavailable, slowdownPercent: nil,
@@ -556,8 +584,14 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             averageRepDuration: averageDuration, movementDuration: movementDuration,
             interrupted: state == .interrupted, finishedAt: Date(),
             slowdownPercent: coaching.slowdownPercent, coaching: coaching)
-        completed.nextSetPlan = loadPrediction().map { WorkoutCoach.nextSetPlan(from: $0) }
-            ?? WorkoutCoach.nextSetPlan(for: completed)
+        let acceptedIDs = Set(accepted.map(\.id))
+        let peakSpeeds: [Double?] = runningGeneric
+            ? genericMetrics.values.filter { acceptedIDs.contains($0.id) && $0.status == .available }.map(\.peakSpeed)
+            : (profileMetrics?.reps ?? []).filter { acceptedIDs.contains($0.id) && $0.status == .available }.map(\.peakLiftingSpeed)
+        completed.peakSpeedMPS = peakSpeeds.compactMap { $0 }.filter { $0.isFinite && $0 > 0 }.max()
+        completed.nextSetPlan = completed.interrupted ? WorkoutCoach.nextSetPlan(for: completed) :
+            (loadPrediction().map { WorkoutCoach.nextSetPlan(from: $0) }
+                ?? WorkoutCoach.nextSetPlan(for: completed))
         completedSetResults.append(completed)
         latestSetResult = completed
         betweenSetStartedAt = ProcessInfo.processInfo.systemUptime
@@ -606,7 +640,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             let automaticRIR = velocityProfile.flatMap {
                 history.automaticRIR(for: set.prescription.exercise,
                                      completedReps: set.reps.count,
-                                     velocityProfile: $0)
+                                     velocityProfile: $0, loadLB: set.prescription.loadLB)
             }
             let precedingSet = index > 0 ? session.sets[index - 1] : nil
             let precedingRest = precedingSet.map { max(0, set.start - $0.end) }

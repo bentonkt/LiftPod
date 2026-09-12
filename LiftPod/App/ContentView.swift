@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: CaptureModel
+    var workoutRecordingDirectory: URL? = nil
     var toggleInterface: (() -> Void)? = nil
     @StateObject private var offlineModel = OfflinePreprocessingModel()
     @State private var showingRawCSVImporter = false
@@ -135,17 +136,20 @@ struct ContentView: View {
             .disabled(!model.monitoringActive || !model.motionUpdatesActive)
             .accessibilityIdentifier("recording-toggle")
 
+            if let directory = workoutRecordingDirectory {
+                RecordingExportButton(url: directory, title: "Export Recorded Workout Set")
+            }
             if let url = model.completedCSVURL {
-                ShareLink(item: url) {
-                    Label("Export Last Recording", systemImage: "square.and.arrow.up")
-                }
+                RecordingExportButton(url: url, title: "Export Last Raw Recording")
                 .accessibilityIdentifier("export-recording")
             } else {
                 Button {} label: {
-                    Label("Export Last Recording", systemImage: "square.and.arrow.up")
+                    Label("Export Last Raw Recording", systemImage: "square.and.arrow.up")
                 }
                     .disabled(true)
                     .accessibilityIdentifier("export-recording-disabled")
+                Text("Raw CSV export becomes available after Stop Recording. Workout sets use Export Recorded Workout Set.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -209,5 +213,64 @@ struct ContentView: View {
 
     private func number(_ value: Double) -> String {
         value.formatted(.number.precision(.significantDigits(8)))
+    }
+}
+
+/// Exports a complete set as a ZIP, or a raw recording as CSV, through Files.
+struct RecordingExportButton: View {
+    let url: URL
+    let title: String
+    @State private var document: RecordingExportDocument?
+    @State private var exporting = false
+    @State private var exportError: String?
+    @State private var filename = "recording"
+    @State private var contentType: UTType = .data
+
+    var body: some View {
+        Button {
+            do {
+                let isDirectory = try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
+                contentType = isDirectory ? .zip : .commaSeparatedText
+                filename = isDirectory ? "LiftPod-set-\(url.lastPathComponent).zip" : url.lastPathComponent
+                if isDirectory {
+                    var coordinatorError: NSError?
+                    var readResult: Result<Data, Error>?
+                    NSFileCoordinator().coordinate(readingItemAt: url, options: .forUploading,
+                                                   error: &coordinatorError) { archive in
+                        readResult = Result { try Data(contentsOf: archive) }
+                    }
+                    if let coordinatorError { throw coordinatorError }
+                    guard let readResult else { throw CocoaError(.fileReadUnknown) }
+                    document = RecordingExportDocument(data: try readResult.get())
+                } else {
+                    document = RecordingExportDocument(data: try Data(contentsOf: url))
+                }
+                exporting = true
+            } catch { exportError = error.localizedDescription }
+        } label: {
+            Label(title, systemImage: "square.and.arrow.up")
+        }
+        .fileExporter(isPresented: $exporting, document: document,
+                      contentType: contentType, defaultFilename: filename) { result in
+            if case let .failure(error) = result { exportError = error.localizedDescription }
+        }
+        .alert("Could not export recording", isPresented: Binding(
+            get: { exportError != nil }, set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: { Text(exportError ?? "") }
+    }
+}
+
+struct RecordingExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.data] }
+    var data: Data
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else { throw CocoaError(.fileReadCorruptFile) }
+        self.data = data
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }
