@@ -3,6 +3,27 @@ import Foundation
 
 enum V2ProcessorBoundary: String, Codable, Sendable { case start, end }
 
+/// Recording versions are independent of the detector's frozen DSP identity.
+enum V2RecordingFormat {
+    static let continuousOrder = "predict-detect-authorize-boundaries-resolve-v1"
+
+    static func schema(profile: V2DSPProfile, metrics: RepMetricsConfiguration?) -> Int {
+        if profile.identity.algorithm.rawValue == "adaptive-axis-v7" ||
+            metrics?.version == "vertical-metrics-v2" || metrics?.devicePath != nil { return 7 }
+        return profile.identity.profileVersion == "experimental-v6" ? 6 : 2
+    }
+
+    static func processor(_ schema: Int) -> String { "rep-analysis-v\(schema)" }
+}
+
+/// The observations available after detection/authorization for one uniform frame.
+/// Explicit per-frame inputs prevent callback batching from changing delayed observation order.
+struct V2MetricsFrameInput: Codable, Sendable, Equatable {
+    let sourceTimestamp: Double
+    let boundaryEvidence: [V2BoundaryEvidence]
+    let committedEvents: [V2CycleEvidence]
+}
+
 struct V2ProcessorTransaction: Codable, Sendable, Equatable {
     let schemaVersion: Int
     let processorVersion: String
@@ -14,16 +35,18 @@ struct V2ProcessorTransaction: Codable, Sendable, Equatable {
     let profileID: String
     let profileHash: String
     let outputHash: String
+    var metricsFrames: [V2MetricsFrameInput]? = nil
 
     init(schemaVersion: Int, processorVersion: String, ingestSequence: Int,
          boundary: V2ProcessorBoundary?, input: RawMotionEvent?, output: V2ProcessorSnapshot,
          uniformSamples: [ResampledMotionSample], profileID: String, profileHash: String,
-         outputHash: String? = nil) {
+         outputHash: String? = nil, metricsFrames: [V2MetricsFrameInput]? = nil) {
         self.schemaVersion = schemaVersion; self.processorVersion = processorVersion
         self.ingestSequence = ingestSequence; self.boundary = boundary; self.input = input
         self.output = output; self.uniformSamples = uniformSamples
         self.profileID = profileID; self.profileHash = profileHash
         self.outputHash = outputHash ?? Self.hash(output)
+        self.metricsFrames = metricsFrames
     }
 
     static func hash(_ output: V2ProcessorSnapshot) -> String {
@@ -58,6 +81,10 @@ struct V2AnalysisManifest: Codable, Sendable, Equatable {
     let maximumRecordingQueueLag: Int
     let referenceMeasurements: V2ReferenceMeasurements?
     let syncMarkers: [V2SyncMarker]
+    var metricsConfiguration: RepMetricsConfiguration? = nil
+    var metricsConfigurationHash: String? = nil
+    var streamVersion: String? = nil
+    var processingOrderVersion: String? = nil
 }
 
 struct V2SessionSummary: Codable, Sendable, Equatable {
@@ -67,6 +94,7 @@ struct V2SessionSummary: Codable, Sendable, Equatable {
     let state: V2SetState
     let committedCount: Int
     let candidates: [V2CycleEvidence]
+    var metrics: RepMetricsSnapshot? = nil
 }
 
 struct V2SessionMetadata: Codable, Sendable, Equatable {
@@ -144,14 +172,15 @@ actor V2SessionRecorder: V2RecordingSink {
         if let finalized { return finalized }
         guard let descriptor, let profile else { return nil }
         let isV6 = profile.identity.profileVersion == "experimental-v6"
-        let schema = isV6 ? 6 : 2
-        let processor = isV6 ? "rep-analysis-v6" : "rep-analysis-v2"
+        let schema = V2RecordingFormat.schema(profile: profile, metrics: snapshot.metrics?.configuration)
+        let processor = V2RecordingFormat.processor(schema)
         let end = V2ProcessorTransaction(schemaVersion: schema, processorVersion: processor,
                                          ingestSequence: transactions.count, boundary: .end, input: nil,
                                          output: snapshot, uniformSamples: [], profileID: profile.profileID,
-                                         profileHash: profile.contentHash)
+                                         profileHash: profile.contentHash, metricsFrames: schema == 7 ? [] : nil)
         transactions.append(end)
-        let prefix = isV6 ? "experimental-v6" : "experimental-v2"
+        let versionLabel = schema == 7 ? "v7" : (isV6 ? "v6" : "v2")
+        let prefix = "experimental-\(versionLabel)"
         let folder = root.appendingPathComponent("\(prefix)-\(descriptor.setID.uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let urls = V2SessionBundleURLs(
@@ -159,7 +188,7 @@ actor V2SessionRecorder: V2RecordingSink {
             transactions: folder.appendingPathComponent("processor-transactions.jsonl"),
             metadata: folder.appendingPathComponent("metadata.json"),
             summary: folder.appendingPathComponent("summary.json"),
-            manifest: folder.appendingPathComponent("\(isV6 ? "v6" : "v2")-analysis-manifest.json"),
+            manifest: folder.appendingPathComponent("\(versionLabel)-analysis-manifest.json"),
             profile: folder.appendingPathComponent("\(prefix)-profile.json")
         )
         let clockOffset = raw.first.map { $0.receiptUptime - $0.sourceTimestamp }
@@ -170,11 +199,16 @@ actor V2SessionRecorder: V2RecordingSink {
             sourceToReceiptClockOffset: clockOffset, transactionCount: transactions.count,
             rawSampleCount: raw.count, committedRepCount: snapshot.committedCount,
             processingP95: 0, maximumRecordingQueueLag: 0,
-            referenceMeasurements: reference, syncMarkers: markers
+            referenceMeasurements: reference, syncMarkers: markers,
+            metricsConfiguration: snapshot.metrics?.configuration,
+            metricsConfigurationHash: snapshot.metrics?.configurationHash,
+            streamVersion: snapshot.streamVersion,
+            processingOrderVersion: schema == 7 ? V2RecordingFormat.continuousOrder : nil
         )
         let summary = V2SessionSummary(schemaVersion: schema, processorVersion: processor,
                                        descriptor: descriptor, state: state,
-                                       committedCount: snapshot.committedCount, candidates: snapshot.recentEvents)
+                                       committedCount: snapshot.committedCount, candidates: snapshot.recentEvents,
+                                       metrics: snapshot.metrics)
         let metadata = V2SessionMetadata(schemaVersion: schema, setID: descriptor.setID, createdUTC: Date())
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
         let lineEncoder = JSONEncoder(); lineEncoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -207,11 +241,13 @@ struct V2ReplayArchive: Sendable {
 
     static func load(from directory: URL) throws -> Self {
         let decoder = JSONDecoder()
-        let isV6 = FileManager.default.fileExists(atPath: directory.appendingPathComponent("v6-analysis-manifest.json").path)
+        let version = ["v7", "v6", "v2"].first {
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent("\($0)-analysis-manifest.json").path)
+        } ?? "v2"
         let manifest = try decoder.decode(V2AnalysisManifest.self,
-            from: Data(contentsOf: directory.appendingPathComponent(isV6 ? "v6-analysis-manifest.json" : "v2-analysis-manifest.json")))
+            from: Data(contentsOf: directory.appendingPathComponent("\(version)-analysis-manifest.json")))
         let profile = try decoder.decode(V2DSPProfile.self,
-            from: Data(contentsOf: directory.appendingPathComponent(isV6 ? "experimental-v6-profile.json" : "experimental-v2-profile.json")))
+            from: Data(contentsOf: directory.appendingPathComponent("experimental-\(version)-profile.json")))
         let data = try Data(contentsOf: directory.appendingPathComponent("processor-transactions.jsonl"))
         let transactions = try data.split(separator: 0x0A).map {
             try decoder.decode(V2ProcessorTransaction.self, from: Data($0))
@@ -229,7 +265,7 @@ struct V2ReplayResult: Sendable, Equatable {
 struct V2ReplayVerifier: Sendable {
     func verify(_ archive: V2ReplayArchive) -> V2ReplayResult {
         let manifest = archive.manifest
-        guard [2, 6].contains(manifest.schemaVersion) else { return fail(nil, "schemaVersion") }
+        guard [2, 6, 7].contains(manifest.schemaVersion) else { return fail(nil, "schemaVersion") }
         guard manifest.completionState == .complete else { return fail(nil, "completionState") }
         guard manifest.rawSampleCount > 0, manifest.transactionCount > 0 else { return fail(nil, "nonempty recording") }
         guard manifest.transactionCount == archive.transactions.count else { return fail(nil, "transactionCount") }
@@ -245,10 +281,36 @@ struct V2ReplayVerifier: Sendable {
         guard let valid = try? archive.profile.validated(), valid.contentHash == manifest.descriptor.dspContentHash,
               manifest.dspHashes == [valid.contentHash], manifest.profiles == [valid],
               manifest.processingConfiguration == valid.identity else { return fail(nil, "profileHash") }
-        var raw: [RawMotionSample] = []
+        let raw = archive.transactions.compactMap { $0.input?.sample }
+        guard manifest.streamVersion == nil || manifest.streamVersion == V2StreamingResampler.version else {
+            return fail(nil, "streamVersion")
+        }
+        let streaming = manifest.streamVersion != nil
+        var resampler = V2StreamingResampler()
+        var replayedUniformSamples: [ResampledMotionSample] = []
+        if !streaming {
+            guard let resampling = try? V2UniformSourceResampler().resample(raw, profile: valid),
+                  resampling.discontinuityEpochs.isEmpty else { return fail(nil, "resampling") }
+            replayedUniformSamples = resampling.samples
+        }
+        var lastSource: Double?
+        var invalidIntervals: [(start: Double, end: Double)] = []
+        var recoveryStart: Double?
+        var recoveryNeedsAnchor = false
         var uniformCount = 0
-        let expectedSchema = valid.identity.profileVersion == "experimental-v6" ? 6 : 2
-        let expectedProcessor = expectedSchema == 6 ? "rep-analysis-v6" : "rep-analysis-v2"
+        var metrics: PassiveRepMetrics?
+        if let configuration = manifest.metricsConfiguration {
+            guard (try? configuration.validated()) != nil,
+                  manifest.metricsConfigurationHash == configuration.contentHash else { return fail(nil, "metricsConfiguration") }
+            metrics = PassiveRepMetrics(configuration: configuration)
+        } else if manifest.metricsConfigurationHash != nil { return fail(nil, "metricsConfiguration") }
+        let expectedSchema = V2RecordingFormat.schema(profile: valid, metrics: manifest.metricsConfiguration)
+        let expectedProcessor = V2RecordingFormat.processor(expectedSchema)
+        guard manifest.schemaVersion == expectedSchema,
+              manifest.processingOrderVersion == (expectedSchema == 7 ? V2RecordingFormat.continuousOrder : nil) else {
+            return fail(nil, "processingOrderVersion")
+        }
+        var committedInputs: [String: V2CycleEvidence] = [:]
         for transaction in archive.transactions {
             guard transaction.schemaVersion == expectedSchema,
                   transaction.processorVersion == expectedProcessor,
@@ -260,20 +322,115 @@ struct V2ReplayVerifier: Sendable {
                 return fail(transaction.ingestSequence, "output")
             }
             guard finite(transaction) else { return fail(transaction.ingestSequence, "finiteDSPFields") }
+            if expectedSchema == 7 {
+                guard let inputs = transaction.metricsFrames, inputs.count == transaction.uniformSamples.count else {
+                    return fail(transaction.ingestSequence, "metricsFrames")
+                }
+            } else if transaction.metricsFrames != nil { return fail(transaction.ingestSequence, "metricsFrames") }
+            guard transaction.output.streamVersion == manifest.streamVersion else { return fail(transaction.ingestSequence, "streamVersion") }
             if transaction.input == nil, transaction.boundary != .end {
                 return fail(transaction.ingestSequence, "inputEvent")
             }
             if let input = transaction.input {
-                raw.append(input.sample)
-                guard let result = try? V2UniformSourceResampler().resample(raw, profile: valid) else {
-                    return fail(transaction.ingestSequence, "resampling")
+                let expected: [ResampledMotionSample]
+                if streaming {
+                    guard valid.identity.expectedSensorSide.matches(input.sample.sensorLocation),
+                          let step = try? resampler.append(input.sample) else { return fail(transaction.ingestSequence, "resampling") }
+                    expected = step.samples
+                    if step.discontinuity != nil {
+                        metrics?.sourceDiscontinuity(at: input.sample.sourceTimestamp)
+                        recoveryStart = input.sample.sourceTimestamp
+                        recoveryNeedsAnchor = expected.isEmpty
+                        invalidIntervals.append((lastSource ?? input.sample.sourceTimestamp, .infinity))
+                    }
+                    lastSource = input.sample.sourceTimestamp
+                } else {
+                    var expectedEnd = uniformCount
+                    while expectedEnd < replayedUniformSamples.count,
+                          replayedUniformSamples[expectedEnd].sourceTimestamp <= input.sample.sourceTimestamp + 1e-9 {
+                        expectedEnd += 1
+                    }
+                    expected = Array(replayedUniformSamples[uniformCount..<expectedEnd])
                 }
-                let expected = Array(result.samples.dropFirst(uniformCount))
                 guard equal(expected, transaction.uniformSamples) else {
                     return fail(transaction.ingestSequence, "uniformSamples")
                 }
-                uniformCount = result.samples.count
+                uniformCount += expected.count
             }
+            for (frameIndex, sample) in transaction.uniformSamples.enumerated() {
+                metrics?.observe(sample)
+                if recoveryNeedsAnchor { recoveryStart = sample.sourceTimestamp; recoveryNeedsAnchor = false }
+                if let since = recoveryStart, sample.sourceTimestamp - since + 1e-9 >= V2StreamingResampler.recoveryDuration {
+                    recoveryStart = nil
+                    for index in invalidIntervals.indices where !invalidIntervals[index].end.isFinite {
+                        invalidIntervals[index].end = sample.sourceTimestamp
+                    }
+                }
+                if expectedSchema == 7 {
+                    let input = transaction.metricsFrames![frameIndex]
+                    guard close(input.sourceTimestamp, sample.sourceTimestamp) else {
+                        return fail(transaction.ingestSequence, "metricsFrameTimestamp")
+                    }
+                    for event in input.committedEvents {
+                        guard event.committed, event.rejectionReason == nil,
+                              event.setID == manifest.descriptor.setID,
+                              event.profileID == valid.profileID, event.dspContentHash == valid.contentHash,
+                              event.startTimestamp < event.topTimestamp,
+                              event.topTimestamp <= event.completionTimestamp,
+                              event.completionTimestamp <= event.detectionTimestamp + 1e-9,
+                              event.detectionTimestamp <= sample.sourceTimestamp + 1e-9,
+                              committedInputs[event.id] == nil else {
+                            return fail(transaction.ingestSequence, "committedMetricInput")
+                        }
+                        committedInputs[event.id] = event
+                    }
+                    for evidence in input.boundaryEvidence {
+                        let times = [evidence.observedTimestamp, evidence.confirmedTimestamp,
+                                     evidence.endpointStartTimestamp, evidence.endpointEndTimestamp]
+                        guard times.allSatisfy(\.isFinite),
+                              evidence.observedTimestamp <= evidence.confirmedTimestamp + 1e-9,
+                              evidence.confirmedTimestamp <= sample.sourceTimestamp + 1e-9,
+                              evidence.endpointStartTimestamp <= evidence.observedTimestamp + 1e-9,
+                              evidence.endpointEndTimestamp + 1e-9 >= evidence.observedTimestamp,
+                              evidence.associatedCandidateIDs.contains(where: { id in
+                                  committedInputs[id] != nil || transaction.output.recentEvents.contains(where: { $0.id == id })
+                              }) else {
+                            return fail(transaction.ingestSequence, "boundaryEvidence")
+                        }
+                    }
+                    metrics?.observeBoundaryEvidence(input.boundaryEvidence, at: sample.sourceTimestamp)
+                    metrics?.observeCommitted(input.committedEvents, at: sample.sourceTimestamp)
+                } else {
+                    metrics?.observeCommitted(transaction.output.recentEvents.filter {
+                        $0.detectionTimestamp <= sample.sourceTimestamp + 1e-9
+                    }, at: sample.sourceTimestamp)
+                }
+            }
+            if expectedSchema == 7 {
+                guard transaction.output.committedCount == committedInputs.count,
+                      transaction.output.recentEvents.filter(\.committed).allSatisfy({ committedInputs[$0.id] == $0 }) else {
+                    return fail(transaction.ingestSequence, "committedMetricInput")
+                }
+            }
+            if transaction.boundary == .end {
+                metrics?.finish(at: raw.last?.sourceTimestamp ?? 0,
+                                interrupted: transaction.output.setState == .interrupted)
+            }
+            guard semanticMetricsEqual(metrics?.snapshot, transaction.output.metrics) else {
+                return fail(transaction.ingestSequence, "regeneratedMetrics")
+            }
+            if streaming {
+                guard transaction.output.isRecovering == (recoveryStart != nil) else { return fail(transaction.ingestSequence, "streamRecovery") }
+                for event in transaction.output.recentEvents where event.committed {
+                    if invalidIntervals.contains(where: {
+                        event.startTimestamp < $0.end && event.completionTimestamp > $0.start + 1e-9
+                    }) { return fail(transaction.ingestSequence, "repSpansInvalidInterval") }
+                }
+            }
+        }
+        guard streaming || uniformCount == replayedUniformSamples.count else { return fail(nil, "uniformSamples") }
+        if expectedSchema == 7, committedInputs.count != manifest.committedRepCount {
+            return fail(nil, "committedRepCount")
         }
         return .init(passed: true, mismatchSequence: nil, field: nil)
     }
@@ -294,6 +451,24 @@ struct V2ReplayVerifier: Sendable {
 
     private func close(_ left: Double, _ right: Double) -> Bool {
         left.isFinite && right.isFinite && abs(left - right) <= 1e-9
+    }
+
+    private func semanticMetricsEqual(_ left: RepMetricsSnapshot?, _ right: RepMetricsSnapshot?) -> Bool {
+        guard let left, let right else { return left == nil && right == nil }
+        guard let a = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(left)),
+              let b = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(right)) else { return false }
+        func equal(_ a: Any, _ b: Any) -> Bool {
+            if let a = a as? [String: Any], let b = b as? [String: Any] {
+                return Set(a.keys) == Set(b.keys) && a.allSatisfy { key, value in b[key].map { equal(value, $0) } ?? false }
+            }
+            if let a = a as? [Any], let b = b as? [Any] {
+                return a.count == b.count && zip(a, b).allSatisfy { equal($0, $1) }
+            }
+            if let a = a as? NSNumber, let b = b as? NSNumber { return close(a.doubleValue, b.doubleValue) }
+            if let a = a as? String, let b = b as? String { return a == b }
+            return a is NSNull && b is NSNull
+        }
+        return equal(a, b)
     }
 
     private func finite(_ transaction: V2ProcessorTransaction) -> Bool {

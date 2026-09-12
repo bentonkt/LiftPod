@@ -12,6 +12,7 @@ struct V6CycleResult: Sendable, Equatable {
     let outboundArea: Double
     let returnArea: Double
     let interpolatedCount: Int
+    let completionKind: V2BoundaryKind
 }
 
 struct V6SegmenterUpdate: Sendable {
@@ -182,7 +183,10 @@ struct V6QualifiedCycleSegmenter: Sendable {
                 quietSince = nil; quietValues.removeAll()
             }
             let settled = quietSince.map { timestamp - $0 + 1e-9 >= configuration.returnSettlingDuration } ?? false
-            if settled || nextLeg { return complete(at: timestamp, carry: nextLeg && departureAllowed && allowCarryover) }
+            if settled || nextLeg {
+                return complete(at: timestamp, carry: nextLeg && departureAllowed && allowCarryover,
+                                kind: nextLeg ? .continuousReversal : .stationary)
+            }
             if !near && signal - returned.value < reversal {
                 state = .returning; quietSince = nil; quietValues.removeAll()
             }
@@ -238,7 +242,8 @@ struct V6QualifiedCycleSegmenter: Sendable {
         return .init(cycle: nil, rejection: (rejectedID, reason))
     }
 
-    private mutating func complete(at detectionTime: Double, carry: Bool) -> V6SegmenterUpdate {
+    private mutating func complete(at detectionTime: Double, carry: Bool,
+                                   kind: V2BoundaryKind) -> V6SegmenterUpdate {
         guard let candidateID, let bottom, let top, let returned else { return reject(.invalidOrdering) }
         let owned = cycle.filter { $0.time <= returned.time }
         var outboundArea = 0.0, returnArea = 0.0
@@ -251,7 +256,7 @@ struct V6QualifiedCycleSegmenter: Sendable {
             candidateID: candidateID, bottom: bottom.value, top: top.value, returned: returned.value,
             startTime: departure, topTime: top.time, completionTime: returned.time, detectionTime: detectionTime,
             outboundArea: outboundArea, returnArea: returnArea,
-            interpolatedCount: owned.filter(\.interpolated).count
+            interpolatedCount: owned.filter(\.interpolated).count, completionKind: kind
         )
         if let reason = validate(result) { return reject(reason) }
         let successor = cycle.filter { $0.time >= returned.time }
