@@ -1,6 +1,40 @@
 import XCTest
 @testable import LiftPod
 
+final class RepSpeedSeriesTests: XCTestCase {
+    func testBaselineAndLatestSlowdown() throws {
+        let series = RepSpeedSeries(speeds: [0.5, 0.6, 0.7, 0.48])
+        XCTAssertEqual(try XCTUnwrap(series.baseline), 0.6, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(series.latestSlowdownPercent), 20, accuracy: 1e-10)
+        XCTAssertEqual(series.points.map(\.id), [1, 2, 3, 4])
+        XCTAssertEqual(Set(series.points.map(\.segment)).count, 1)
+    }
+
+    func testMissingAndInvalidSpeedsStayGaps() {
+        let series = RepSpeedSeries(speeds: [0.5, nil, 0.6, .nan, -.infinity, 0, -1, 0.7, nil])
+        XCTAssertEqual(series.points.compactMap(\.speed), [0.5, 0.6, 0.7])
+        XCTAssertNotEqual(series.points[0].segment, series.points[2].segment)
+        XCTAssertNotEqual(series.points[2].segment, series.points[7].segment)
+        XCTAssertNil(series.latestSlowdownPercent)
+    }
+
+    func testPatternChangeRestartsBaselineAndLine() throws {
+        let series = RepSpeedSeries(speeds: [0.5, 0.6, 0.7, 1, 1, 1, 1.2],
+                                   epochs: [0, 0, 0, 1, 1, 1, 1], activeEpoch: 1)
+        XCTAssertEqual(series.baseline, 1)
+        XCTAssertNotEqual(series.points[2].segment, series.points[3].segment)
+        XCTAssertEqual(try XCTUnwrap(series.latestSlowdownPercent), -20, accuracy: 1e-10)
+        XCTAssertNil(RepSpeedSeries(speeds: [0.5, 0.6, 0.7], epochs: [0, 0, 0], activeEpoch: 1).baseline)
+    }
+
+    func testEmptyWarmupAndLateFinalization() {
+        XCTAssertTrue(RepSpeedSeries().points.isEmpty)
+        XCTAssertNil(RepSpeedSeries(speeds: [0.01, 0.5, 0.6]).baseline)
+        XCTAssertNil(RepSpeedSeries(speeds: [0.5, 0.6, nil]).baseline)
+        XCTAssertNotNil(RepSpeedSeries(speeds: [0.5, 0.6, 0.7]).baseline)
+    }
+}
+
 final class WorkoutSummaryTests: XCTestCase {
     func testTwentyRepsWithoutSpeedRecommendOneHeavierStepAndRest() throws {
         let result = WorkoutSetResult(id: UUID(), prescription: weightedPrescription(), reps: 20,
@@ -271,6 +305,11 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertEqual(roundTrip.slowdownPercent, setResult.slowdownPercent)
         XCTAssertEqual(model.completedSetResults.count, 1)
         let completedSummaryURL = model.summaryURL
+        let completedRecordingDirectory = try XCTUnwrap(model.latestRecordingDirectory)
+        XCTAssertEqual(completedRecordingDirectory.path,
+                       completedSummaryURL?.deletingLastPathComponent().path)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: completedRecordingDirectory.appendingPathComponent("raw-motion.csv").path))
         let liveSample = raw(546)
         provider.emit(.sample(RawMotionSample(
             index: liveSample.index, sourceTimestamp: liveSample.sourceTimestamp,
@@ -297,6 +336,7 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertEqual(model.latestSetResult?.id, setResult.id)
         XCTAssertEqual(model.summaryURL, completedSummaryURL)
         model.finishWorkout()
+        XCTAssertEqual(model.latestRecordingDirectory, completedRecordingDirectory)
         let result = try XCTUnwrap(model.result)
         let saved = try JSONDecoder().decode(WorkoutSetResult.self, from: Data(contentsOf: XCTUnwrap(model.summaryURL)))
         XCTAssertEqual(saved.reps, result.reps)

@@ -21,6 +21,10 @@ struct SessionRep: Codable, Equatable {
         id = event.id; self.exercise = exercise
         start = event.startTimestamp; end = event.completionTimestamp
     }
+    init(_ event: AutoCycleEvidence, exercise: V2Exercise) {
+        id = event.id; self.exercise = exercise
+        start = event.start; end = event.completion
+    }
     init(id: String, exercise: V2Exercise = .bicepsCurl, start: Double, end: Double) {
         self.id = id; self.exercise = exercise; self.start = start; self.end = end
     }
@@ -108,6 +112,35 @@ struct WorkoutSessionReducer {
         current = nil; self.boundary = max(self.boundary, boundary)
     }
 
+    /// Schema 9 owns automatic boundaries and cycle membership. This is only a
+    /// compatibility projection for the existing workout summary/history UI;
+    /// it must never infer, close, or archive an automatic set independently.
+    mutating func projectAutomatic(
+        _ snapshot: AutoWorkoutSnapshot,
+        prescriptions: [String: WorkoutPrescription],
+        liveSetID: String?
+    ) {
+        guard policy.version == "automatic-schema9-projection" else { return }
+        let cycles = Dictionary(uniqueKeysWithValues: snapshot.cycles.map { ($0.id, $0) })
+        let records = snapshot.sets.filter { $0.status != .discarded }
+        let projected: [(record: AutoSetRecord, set: SessionSet)] = records.compactMap { record in
+            guard let selected = prescriptions[record.id] else { return nil }
+            let reps = record.cycleIDs.compactMap { cycles[$0] }
+                .sorted { lhs, rhs in
+                    lhs.start == rhs.start ? lhs.id < rhs.id : lhs.start < rhs.start
+                }
+                .map { SessionRep($0, exercise: selected.exercise) }
+                .filter(\.valid)
+            guard !reps.isEmpty else { return nil }
+            return (record, SessionSet(id: record.id, prescription: selected, reps: reps,
+                                       endReason: record.status == .sealed ? "automaticSealed" : nil))
+        }
+        current = projected.first(where: { $0.record.id == liveSetID })?.set
+        sets = projected.filter { $0.record.id != liveSetID }.map(\.set)
+        seen = Set(projected.flatMap { $0.set.reps.map(\.id) })
+        ended = snapshot.state == .finished
+    }
+
 
 }
 
@@ -142,7 +175,7 @@ struct SetReviewDraft: Identifiable, Equatable {
     let precedingSetID: String?
     let precedingRestSeconds: Double?
 
-    init(sessionID: UUID, set: SessionSet, endedAt: Date = Date(),
+    init(sessionID: UUID, set: SessionSet, detectedReps: Int? = nil, endedAt: Date = Date(),
          velocityProfile: SetVelocityProfile? = nil,
          automaticRIR: AutomaticRIREstimate? = nil,
          precedingSetID: String? = nil,
@@ -150,7 +183,7 @@ struct SetReviewDraft: Identifiable, Equatable {
         id = set.id
         self.sessionID = sessionID
         exercise = set.prescription.exercise
-        detectedReps = set.reps.count
+        self.detectedReps = detectedReps ?? set.reps.count
         averageRepDuration = set.reps.isEmpty ? nil : set.averageDuration
         self.endedAt = endedAt
         loadLB = set.prescription.loadLB

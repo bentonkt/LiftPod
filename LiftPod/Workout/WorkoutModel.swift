@@ -1,6 +1,46 @@
 import Combine
 import Foundation
 
+/// Display-only series. Missing measurements and new patterns break the line.
+struct RepSpeedSeries: Equatable {
+    struct Point: Identifiable, Equatable {
+        let id: Int
+        let speed: Double?
+        let epoch: Int
+        let segment: Int
+    }
+    let points: [Point]
+    let baseline: Double?
+    let activeEpoch: Int
+    let wholeCycle: Bool
+
+    init(speeds: [Double?] = [], epochs: [Int] = [], activeEpoch: Int = 0,
+         wholeCycle: Bool = true) {
+        self.activeEpoch = activeEpoch
+        self.wholeCycle = wholeCycle
+        var points: [Point] = []
+        var segment = 0
+        for (index, value) in speeds.enumerated() {
+            let speed = value.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+            let epoch = epochs.indices.contains(index) ? epochs[index] : activeEpoch
+            if let previous = points.last, previous.speed == nil || speed == nil || previous.epoch != epoch {
+                segment += 1
+            }
+            points.append(.init(id: index + 1, speed: speed, epoch: epoch, segment: segment))
+        }
+        self.points = points
+        let firstThree = points.filter { $0.epoch == activeEpoch }
+            .compactMap(\.speed).filter { $0 >= 0.05 }.prefix(3)
+        baseline = firstThree.count == 3 ? firstThree.reduce(0, +) / 3 : nil
+    }
+
+    var latestSlowdownPercent: Double? {
+        guard let last = points.last, last.epoch == activeEpoch,
+              let speed = last.speed, let baseline else { return nil }
+        return 100 * (1 - speed / baseline)
+    }
+}
+
 enum TrainingGoal: String, Codable, CaseIterable, Identifiable {
     case strength = "Strength", muscle = "Build muscle", consistency = "Consistency"
     var id: String { rawValue }
@@ -239,8 +279,12 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             } else {
                 exerciseWeights[prescription.exercise] = prescription.loadLB
             }
+            if automaticSets, automaticWorkoutActive {
+                rememberAutomaticPrescription(prescription, at: automaticSnapshot.timestamp)
+            }
         }
     }
+    @Published var automaticSets = false
     @Published var countingMode: RepCountingMode = .generic
     @Published private(set) var state: V2SetState = .idle
     @Published private(set) var reps = 0
@@ -254,9 +298,11 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         state: .buildingBaseline, slowdownPercent: nil,
         explanation: "Complete three smooth reps to establish your baseline.", evidenceIsValid: false)
     @Published private(set) var liveRepSpeedMPS: Double?
+    @Published private(set) var repSpeedSeries = RepSpeedSeries()
     @Published private(set) var liveSpeedDegradationPercent: Double?
     @Published private(set) var liveRIR: AutomaticRIREstimate?
     @Published private(set) var summaryURL: URL?
+    @Published private(set) var latestRecordingDirectory: URL?
 
     @Published private(set) var session: WorkoutSessionReducer?
     @Published private(set) var sessionURL: URL?
@@ -288,6 +334,18 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var resultBeforePreparation: WorkoutSetResult?
     private var restStartBeforePreparation: Double?
     private var summaryURLBeforePreparation: URL?
+    private weak var automaticCapture: CaptureModel?
+    private var automaticSnapshotSubscription: AnyCancellable?
+    private var automaticSnapshot = AutoWorkoutSnapshot()
+    @Published private(set) var automaticStatus = "Ready — begin when ready"
+    @Published private(set) var automaticState: AutoWorkoutState = .idle
+    @Published private(set) var automaticRecoveryProvisional = false
+    private var automaticSetPrescriptions: [String: WorkoutPrescription] = [:]
+    private var automaticPrescriptionTimeline: [(time: Double, value: WorkoutPrescription)] = []
+    private var automaticResultIDs: [String: UUID] = [:]
+    private var automaticReviewedSetIDs: Set<String> = []
+    private var automaticPostSetID: String?
+    private var automaticPostSetCycleCount = 0
 
     init(sessionDirectory: URL? = nil, historyFileURL: URL? = nil,
          makeProfileRecorder: @escaping () -> any V2RecordingSink = { V2SessionRecorder() }) {
@@ -297,6 +355,10 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
 
     var completedSets: [SessionSet] { session?.sets ?? [] }
+    var automaticWorkoutActive: Bool {
+        automaticState != .idle && automaticState != .finished
+    }
+    var ownsMotionCapture: Bool { !automaticSets && isRunning }
     var restStart: Double? { betweenSetStartedAt }
     var sourceTime: Double { latestSourceTime ?? 0 }
     var elapsedTime: Double {
@@ -331,7 +393,8 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             return String(rir)
         }
         guard let estimate = pendingSetReviews.first(where: { $0.id == sourceSetID })?.automaticRIR else {
-            return nil
+            guard automaticSets, let liveRIR else { return nil }
+            return liveRIR.cappedAtFourPlus ? "4+" : String(liveRIR.repsInReserve)
         }
         return estimate.cappedAtFourPlus ? "4+" : String(estimate.repsInReserve)
     }
@@ -343,6 +406,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func updateNextSet() {
         guard prescription.isValid, supportedExercise else { error = "Choose an available exercise and valid target."; return }
+        guard !automaticWorkoutActive else { return }
         session?.apply(.selection(prescription))
     }
 
@@ -416,15 +480,153 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
              .skullCrusher, .lunge, .bentOverRows: nil
         }
     }
-    var supportedExercise: Bool { countingMode == .generic || selectedProfile != nil }
+    var supportedExercise: Bool { automaticSets || countingMode == .generic || selectedProfile != nil }
 
     func signalReady(_ capture: CaptureModel, now: Double = ProcessInfo.processInfo.systemUptime) -> Bool {
         capture.liveSensor(now: now) == .rightHeadphone
     }
 
     func canStart(_ capture: CaptureModel) -> Bool {
-        !isRunning && prescription.isValid && supportedExercise &&
-        !capture.recordingActive && signalReady(capture)
+        !automaticSets && !isRunning && prescription.isValid && supportedExercise &&
+        !capture.recordingActive && !capture.automaticTrackingActive &&
+        !capture.manualAnalysisActive && signalReady(capture)
+    }
+
+    func bindAutoWorkout(_ capture: CaptureModel) {
+        automaticCapture = capture
+        automaticSnapshotSubscription = capture.autoWorkout.$snapshot.dropFirst().sink { [weak self] snapshot in
+            self?.synchronizeAutomatic(snapshot: snapshot)
+        }
+        if capture.automaticTrackingActive {
+            synchronizeAutomatic(snapshot: capture.autoWorkout.snapshot)
+        }
+    }
+
+    func startAutomaticWorkout(_ capture: CaptureModel) async {
+        guard prescription.isValid, !isRunning,
+              !capture.recordingActive, !capture.manualAnalysisActive,
+              !capture.automaticTrackingActive else { return }
+        automaticSets = true
+        bindAutoWorkout(capture)
+        prepareAutomaticProjection()
+        await capture.startAutoWorkout(side: .right)
+        synchronizeAutomatic(snapshot: capture.autoWorkout.snapshot)
+    }
+
+    func finishAutomaticWorkout() async {
+        guard let automaticCapture, automaticWorkoutActive else { return }
+        await automaticCapture.finishAutoWorkout()
+        synchronizeAutomatic(snapshot: automaticCapture.autoWorkout.snapshot)
+    }
+
+    func pauseAutomaticTracking() async {
+        guard let automaticCapture, automaticWorkoutActive else { return }
+        await automaticCapture.pauseAutoWorkout()
+        synchronizeAutomatic(snapshot: automaticCapture.autoWorkout.snapshot)
+    }
+
+    func resumeAutomaticTracking() async {
+        guard let automaticCapture, automaticWorkoutActive else { return }
+        await automaticCapture.resumeAutoWorkout()
+        synchronizeAutomatic(snapshot: automaticCapture.autoWorkout.snapshot)
+    }
+
+    /// Applies the coordinator's published truth to the existing workout UI.
+    /// Tests may call this directly without constructing a motion provider.
+    func synchronizeAutomatic(snapshot: AutoWorkoutSnapshot, now: Date = Date()) {
+        guard automaticSets else { return }
+        if session == nil || session?.policy.version != "automatic-schema9-projection" {
+            prepareAutomaticProjection()
+        }
+        automaticSnapshot = snapshot
+        automaticState = snapshot.state
+        automaticStatus = snapshot.status
+        if let export = automaticCapture?.autoWorkout.exportURLs.first {
+            latestRecordingDirectory = export.deletingLastPathComponent()
+            summaryURL = automaticCapture?.autoWorkout.exportURLs.first {
+                $0.lastPathComponent == "summary.json"
+            }
+        }
+        latestSourceTime = snapshot.timestamp
+        if firstSourceTime == nil {
+            firstSourceTime = snapshot.cycles.map(\.start).min() ?? snapshot.timestamp
+        }
+
+        for record in snapshot.sets where record.status != .discarded &&
+            automaticSetPrescriptions[record.id] == nil {
+            automaticSetPrescriptions[record.id] = automaticPrescription(at: record.start)
+        }
+        let eligibleRecords = snapshot.sets.filter { $0.status != .discarded }
+        let lastRecord = eligibleRecords.last
+        if let record = lastRecord, snapshot.restStartedAt != nil,
+           record.status != .sealed {
+            automaticPostSetID = record.id
+            automaticPostSetCycleCount = record.cycleIDs.count
+        }
+        var liveSetID: String?
+        if snapshot.state == .running, snapshot.restStartedAt == nil,
+           snapshot.candidateCount == 0, let record = lastRecord, record.status == .open {
+            if let postSetID = automaticPostSetID {
+                if record.id != postSetID || record.cycleIDs.count > automaticPostSetCycleCount {
+                    automaticPostSetID = nil
+                    liveSetID = record.id
+                }
+            } else {
+                liveSetID = record.id
+            }
+        }
+        session?.projectAutomatic(snapshot, prescriptions: automaticSetPrescriptions,
+                                  liveSetID: liveSetID)
+
+        let recordByID = Dictionary(uniqueKeysWithValues: snapshot.sets.map { ($0.id, $0) })
+        let metrics = Dictionary(uniqueKeysWithValues: snapshot.metrics.map { ($0.id, $0) })
+        let projectedSets = (session?.sets ?? []) + (session?.current.map { [$0] } ?? [])
+        let liveID = session?.current?.id
+        let completed = projectedSets.filter { $0.id != liveID }.compactMap { set -> WorkoutSetResult? in
+            guard let record = recordByID[set.id] else { return nil }
+            return automaticResult(for: set, record: record, snapshot: snapshot,
+                                   metrics: metrics, now: now)
+        }
+        completedSetResults = completed
+        latestSetResult = completed.last
+
+        if let live = session?.current, let record = recordByID[live.id] {
+            applyAutomaticLive(set: live, record: record, snapshot: snapshot, metrics: metrics)
+            betweenSetStartedAt = nil
+        } else {
+            reps = latestSetResult?.reps ?? 0
+            learningMovement = snapshot.candidateCount > 0
+            let displayedRecord = completed.last.flatMap { result in
+                snapshot.sets.first { automaticResultIDs[$0.id] == result.id }
+            }
+            automaticRecoveryProvisional = latestSetResult != nil && displayedRecord?.status != .sealed
+            if latestSetResult != nil {
+                state = .complete
+                if snapshot.restStartedAt != nil {
+                    betweenSetStartedAt = ProcessInfo.processInfo.systemUptime - (snapshot.elapsedRest ?? 0)
+                } else if betweenSetStartedAt == nil {
+                    betweenSetStartedAt = ProcessInfo.processInfo.systemUptime
+                }
+            } else {
+                state = snapshot.candidateCount > 0 ? .preparing : .idle
+                betweenSetStartedAt = nil
+            }
+            updateAutomaticSummaryMetrics(for: projectedSets.last, record: displayedRecord,
+                                          snapshot: snapshot, metrics: metrics)
+        }
+
+        enqueueSealedAutomaticReviews(snapshot: snapshot)
+        if snapshot.state == .finished {
+            finalizedElapsedTime = elapsedTime
+            let allReps = completedSets.flatMap(\.reps)
+            let average = allReps.isEmpty ? nil : allReps.map(\.duration).reduce(0, +) / Double(allReps.count)
+            let movement = allReps.first.flatMap { first in allReps.last.map { $0.end - first.start } }
+            result = WorkoutSetResult(id: sessionID, prescription: initialPrescription ?? prescription,
+                reps: completedSetResults.map(\.reps).reduce(0, +), averageRepDuration: average,
+                movementDuration: movement, interrupted: false, finishedAt: now)
+            state = .complete
+            automaticRecoveryProvisional = false
+        }
     }
 
     func startSet(_ capture: CaptureModel) async {
@@ -437,6 +639,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         error = nil; result = nil; summaryURL = nil; latestSetResult = nil
         genericEventIDs = []; genericMetrics = [:]; profileLedger = .init(); profileMetrics = nil
         reps = 0; lastReceipt = nil; betweenSetStartedAt = nil
+        repSpeedSeries = RepSpeedSeries()
         liveRepSpeedMPS = nil; liveSpeedDegradationPercent = nil
         liveRIR = nil; cachedRIRProfile = nil; cachedRIRPrescription = nil
         frozenPrescription = prescription
@@ -479,7 +682,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     func start(_ capture: CaptureModel) async { await startSet(capture) }
 
     func ingest(_ sample: RawMotionSample) async {
-        guard workoutStarted else { return }
+        guard !automaticSets, workoutStarted else { return }
         firstSourceTime = firstSourceTime ?? sample.sourceTimestamp
         latestSourceTime = sample.sourceTimestamp
         guard [.preparing, .active, .finalizing].contains(state) else { return }
@@ -511,7 +714,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     func end() async { await endSet() }
 
     func finishWorkout() {
-        guard workoutStarted, !isRunning else { return }
+        guard !automaticSets, workoutStarted, !isRunning else { return }
         finalizedElapsedTime = elapsedTime
         let interrupted = state == .interrupted
         if !interrupted, let latestSourceTime { session?.apply(.end(latestSourceTime, interrupted: false)) }
@@ -535,6 +738,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
 
     func motionUnavailable() async {
+        guard !automaticSets else { return }
         guard [.preparing, .active, .finalizing].contains(state) else { return }
         if runningGeneric {
             try? await genericSession.apply(.init(kind: .interrupt, interruption: .disconnect))
@@ -546,6 +750,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     /// Detects a stopped stream even when no further callback arrives.
     func checkStaleness(now: Double = ProcessInfo.processInfo.systemUptime) async {
+        guard !automaticSets else { return }
         guard [.preparing, .active, .finalizing].contains(state),
               now - (lastReceipt ?? startedAtUptime) > 0.5 else { return }
         error = "Motion stopped arriving. Reconnect the AirPod and start a new set."
@@ -553,13 +758,187 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
 
     func reset() {
-        guard !isRunning else { return }
+        guard !isRunning, !automaticWorkoutActive else { return }
+        repSpeedSeries = RepSpeedSeries()
         liveRepSpeedMPS = nil; liveSpeedDegradationPercent = nil
         liveRIR = nil; cachedRIRProfile = nil; cachedRIRPrescription = nil
         state = .idle; result = nil; latestSetResult = nil; summaryURL = nil; error = nil
         reps = 0; learningMovement = false; session = nil; sessionURL = nil; completedSetResults = []; initialPrescription = nil
         frozenPrescription = nil; betweenSetStartedAt = nil; sessionStartedAtUptime = nil
         finalizedElapsedTime = nil
+        automaticSnapshot = .init()
+        automaticState = .idle
+        automaticStatus = "Ready — begin when ready"
+        automaticRecoveryProvisional = false
+        automaticSetPrescriptions = [:]
+        automaticPrescriptionTimeline = []
+        automaticResultIDs = [:]
+        automaticReviewedSetIDs = []
+        automaticPostSetID = nil
+        automaticPostSetCycleCount = 0
+    }
+
+    private func prepareAutomaticProjection() {
+        sessionID = UUID()
+        initialPrescription = prescription
+        session = WorkoutSessionReducer(
+            prescription: prescription,
+            policy: WorkoutPolicy(version: "automatic-schema9-projection", inactivitySeconds: 10)
+        )
+        sessionStartedAtUptime = ProcessInfo.processInfo.systemUptime
+        finalizedElapsedTime = nil
+        result = nil
+        latestSetResult = nil
+        completedSetResults = []
+        summaryURL = nil
+        sessionURL = nil
+        reps = 0
+        state = .preparing
+        betweenSetStartedAt = nil
+        firstSourceTime = nil
+        latestSourceTime = nil
+        automaticSetPrescriptions = [:]
+        automaticPrescriptionTimeline = [(-Double.infinity, prescription)]
+        automaticResultIDs = [:]
+        automaticReviewedSetIDs = []
+        automaticPostSetID = nil
+        automaticPostSetCycleCount = 0
+        automaticRecoveryProvisional = false
+    }
+
+    private func rememberAutomaticPrescription(_ value: WorkoutPrescription, at time: Double?) {
+        guard value.isValid else { return }
+        let timestamp = time ?? automaticPrescriptionTimeline.last?.time ?? -Double.infinity
+        if let last = automaticPrescriptionTimeline.last, last.time == timestamp {
+            automaticPrescriptionTimeline[automaticPrescriptionTimeline.count - 1] = (timestamp, value)
+        } else {
+            automaticPrescriptionTimeline.append((timestamp, value))
+        }
+    }
+
+    private func automaticPrescription(at time: Double) -> WorkoutPrescription {
+        automaticPrescriptionTimeline.last(where: { $0.time <= time + 1e-9 })?.value
+            ?? initialPrescription ?? prescription
+    }
+
+    private func automaticVelocityProfile(
+        set: SessionSet,
+        record: AutoSetRecord,
+        snapshot: AutoWorkoutSnapshot
+    ) -> SetVelocityProfile? {
+        guard record.baselineMeanSpeed != nil else { return nil }
+        let byID = Dictionary(uniqueKeysWithValues: snapshot.cycles.map { ($0.id, $0) })
+        let evidence = record.cycleIDs.compactMap { byID[$0] }
+        guard evidence.count == record.cycleIDs.count, let first = evidence.first,
+              evidence.allSatisfy({
+                  $0.sourceEpoch == first.sourceEpoch && $0.learningEpoch == first.learningEpoch &&
+                  $0.templateHash == first.templateHash
+              }) else { return nil }
+        return SetVelocityProfile(set: set, genericMetrics: snapshot.metrics)
+    }
+
+    private func automaticResult(
+        for set: SessionSet,
+        record: AutoSetRecord,
+        snapshot: AutoWorkoutSnapshot,
+        metrics: [String: GenericCycleMetrics],
+        now: Date
+    ) -> WorkoutSetResult {
+        let id = automaticResultIDs[set.id] ?? UUID()
+        automaticResultIDs[set.id] = id
+        let age = snapshot.timestamp.map { max(0, $0 - record.end) } ?? 0
+        let date = now.addingTimeInterval(-age)
+        let profile = automaticVelocityProfile(set: set, record: record, snapshot: snapshot)
+        let automaticRIR = profile.flatMap {
+            history.automaticRIR(for: set.prescription.exercise, completedReps: record.count,
+                                 velocityProfile: $0, loadLB: set.prescription.loadLB)
+        }
+        let coach = WorkoutCoach.evaluate(velocityProfile: profile, reps: record.count,
+            prescription: set.prescription, rirEstimate: automaticRIR,
+            signalUsable: profile != nil)
+        let setMetrics = record.cycleIDs.compactMap { metrics[$0] }.filter { $0.status == .available }
+        let means = setMetrics.compactMap(\.meanSpeed).filter { $0.isFinite && $0 > 0 }
+        let peaks = setMetrics.compactMap(\.peakSpeed).filter { $0.isFinite && $0 > 0 }
+        var value = WorkoutSetResult(id: id, prescription: set.prescription, reps: record.count,
+            averageRepDuration: set.averageDuration,
+            movementDuration: max(0, set.end - set.start), interrupted: false,
+            finishedAt: date, slowdownPercent: coach.slowdownPercent,
+            averageSpeedMPS: means.isEmpty ? nil : means.reduce(0, +) / Double(means.count),
+            peakSpeedMPS: peaks.max(), coaching: coach)
+        value.nextSetPlan = WorkoutCoach.nextSetPlan(for: value)
+        return value
+    }
+
+    private func applyAutomaticLive(
+        set: SessionSet,
+        record: AutoSetRecord,
+        snapshot: AutoWorkoutSnapshot,
+        metrics: [String: GenericCycleMetrics]
+    ) {
+        reps = record.count
+        learningMovement = false
+        state = .active
+        automaticRecoveryProvisional = false
+        updateAutomaticSummaryMetrics(for: set, record: record, snapshot: snapshot, metrics: metrics)
+    }
+
+    private func updateAutomaticSummaryMetrics(
+        for set: SessionSet?,
+        record: AutoSetRecord?,
+        snapshot: AutoWorkoutSnapshot,
+        metrics: [String: GenericCycleMetrics]
+    ) {
+        guard let set, let record else {
+            repSpeedSeries = RepSpeedSeries()
+            liveRepSpeedMPS = nil
+            liveSpeedDegradationPercent = nil
+            liveRIR = nil
+            coaching = WorkoutCoach.evaluate(velocityProfile: nil, reps: reps,
+                                               prescription: activePrescription,
+                                               signalUsable: false)
+            return
+        }
+        let speeds: [Double?] = record.cycleIDs.map { id in
+            guard let metric = metrics[id], metric.status == .available else { return nil }
+            return metric.meanSpeed
+        }
+        let epochs = record.cycleIDs.map { metrics[$0]?.learningEpoch ?? 0 }
+        let activeEpoch = epochs.last ?? 0
+        repSpeedSeries = RepSpeedSeries(speeds: speeds, epochs: epochs,
+                                        activeEpoch: activeEpoch, wholeCycle: true)
+        liveRepSpeedMPS = speeds.compactMap { $0 }.last
+        let profile = automaticVelocityProfile(set: set, record: record, snapshot: snapshot)
+        liveSpeedDegradationPercent = profile?.velocityLossPercent
+        liveRIR = profile.flatMap {
+            history.automaticRIR(for: set.prescription.exercise, completedReps: record.count,
+                                 velocityProfile: $0, loadLB: set.prescription.loadLB)
+        }
+        coaching = WorkoutCoach.evaluate(velocityProfile: profile, reps: record.count,
+            prescription: set.prescription, rirEstimate: liveRIR, signalUsable: profile != nil)
+    }
+
+    private func enqueueSealedAutomaticReviews(snapshot: AutoWorkoutSnapshot) {
+        guard let session else { return }
+        let records = Dictionary(uniqueKeysWithValues: snapshot.sets.map { ($0.id, $0) })
+        for (index, set) in session.sets.enumerated() {
+            guard records[set.id]?.status == .sealed,
+                  !automaticReviewedSetIDs.contains(set.id) else { continue }
+            automaticReviewedSetIDs.insert(set.id)
+            guard !pendingSetReviews.contains(where: { $0.sessionID == sessionID && $0.id == set.id }),
+                  !history.contains(sessionID: sessionID, sourceSetID: set.id),
+                  let record = records[set.id] else { continue }
+            let profile = automaticVelocityProfile(set: set, record: record, snapshot: snapshot)
+            let estimate = profile.flatMap {
+                history.automaticRIR(for: set.prescription.exercise, completedReps: record.count,
+                                     velocityProfile: $0, loadLB: set.prescription.loadLB)
+            }
+            let preceding = index > 0 ? session.sets[index - 1] : nil
+            pendingSetReviews.append(SetReviewDraft(sessionID: sessionID, set: set,
+                detectedReps: record.count,
+                velocityProfile: profile, automaticRIR: estimate,
+                precedingSetID: preceding?.id,
+                precedingRestSeconds: preceding.map { max(0, set.start - $0.end) }))
+        }
     }
 
     private func refresh() async {
@@ -596,6 +975,19 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
                 SetVelocityProfile(set: $0, metrics: profileMetrics)
         }
         liveRepSpeedMPS = latestFinalizedRepSpeed()
+        let currentReps = session?.current?.reps ?? []
+        let activeEpoch = snapshot.generic?.learningEpoch ?? 0
+        let chartSpeeds: [Double?] = currentReps.map { rep in
+            if runningGeneric {
+                let metric = genericMetrics[rep.id]
+                return metric?.status == .available ? metric?.meanSpeed : nil
+            }
+            return profileMetrics?.reps.first(where: { $0.id == rep.id && $0.status == .available })?.meanLiftingSpeed
+        }
+        let chartEpochs = currentReps.map { runningGeneric ? (genericMetrics[$0.id]?.learningEpoch ?? activeEpoch) : 0 }
+        let series = RepSpeedSeries(speeds: chartSpeeds, epochs: chartEpochs,
+                                   activeEpoch: activeEpoch, wholeCycle: runningGeneric)
+        if repSpeedSeries != series { repSpeedSeries = series }
         liveSpeedDegradationPercent = velocity?.velocityLossPercent
         let signalUsable = snapshot.quality == .usable && snapshot.isRecovering != true
         if velocity != cachedRIRProfile || cachedRIRHistoryCount != history.sets.count ||
@@ -668,6 +1060,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             error = "This set was interrupted. Recorded reps are retained, but coaching is unavailable."
         }
         let bundle = runningGeneric ? await genericSession.completedBundle : await profileEngine.completedBundle
+        if let bundle { latestRecordingDirectory = bundle.directory }
         saveSession(interrupted: state == .interrupted, recordingDirectory: bundle?.directory.path)
         if let bundle {
             do {
@@ -720,6 +1113,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     private func restoreAfterAbandonedSet() {
         reps = 0
+        repSpeedSeries = RepSpeedSeries()
         liveRepSpeedMPS = nil
         liveSpeedDegradationPercent = nil
         liveRIR = nil

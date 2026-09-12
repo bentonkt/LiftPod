@@ -138,6 +138,13 @@ struct ContentView: View {
 
             if let directory = workoutRecordingDirectory {
                 RecordingExportButton(url: directory, title: "Export Recorded Workout Set")
+                    .accessibilityIdentifier("export-workout-set")
+            } else {
+                Button {} label: {
+                    Label("Export Recorded Workout Set", systemImage: "square.and.arrow.up")
+                }
+                .disabled(true)
+                .accessibilityIdentifier("export-workout-set-disabled")
             }
             if let url = model.completedCSVURL {
                 RecordingExportButton(url: url, title: "Export Last Raw Recording")
@@ -148,7 +155,7 @@ struct ContentView: View {
                 }
                     .disabled(true)
                     .accessibilityIdentifier("export-recording-disabled")
-                Text("Raw CSV export becomes available after Stop Recording. Workout sets use Export Recorded Workout Set.")
+                Text("Complete a set in the workout interface to export its full recording. Raw CSV export becomes available after Stop Recording.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

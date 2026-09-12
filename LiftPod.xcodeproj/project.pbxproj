@@ -86,6 +86,19 @@
 		5DAE61C330926D8EE46D6B02 /* WorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF250F3CBFAA370372FC2895 /* WorkoutView.swift */; };
 		8D68DEAAC4BA97FE4AE0E89F /* WorkoutFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54DFC38F6B6BC35E07B0350A /* WorkoutFlowTests.swift */; };
 		BF559D593E98861F697655BE /* WorkoutSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 215055CB0485F771128546B5 /* WorkoutSession.swift */; };
+		356961CD869EF45760CD28D6 /* AutoWorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63322BFDF214297ECB8B12B9 /* AutoWorkoutView.swift */; };
+		8A1F8B795A96EE77D179FBDE /* AutoPatternEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBB9E52E3C97BFB928FCB208 /* AutoPatternEngine.swift */; };
+		75B3A17EA98F69EDA140B950 /* AutoSetCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB316D4A1DD6B95A07071C4C /* AutoSetCoordinator.swift */; };
+		6728BD1ACA1B0368F78C1F16 /* AutoWorkoutMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE3B77F976ED2FC6EC37445 /* AutoWorkoutMetrics.swift */; };
+		8D93381043159441150C28C9 /* AutoWorkoutModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D5C89FD970F5AAEB669C275 /* AutoWorkoutModel.swift */; };
+		00DBD9A86FB6DCC866C38965 /* AutoWorkoutSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A43A3CAE18E232D71A01E9B /* AutoWorkoutSession.swift */; };
+		D0C062F38761C89620F24B5A /* AutoWorkoutTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10A189C930E3938C022A289 /* AutoWorkoutTypes.swift */; };
+		7B35D47DC5CA54CD6A302EEF /* AutoPatternEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B173E301A9A29E421DFECE96 /* AutoPatternEngineTests.swift */; };
+		50600FE827D039B699A2EBAB /* AutoSetCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABD8ECAE233F613A2C391EDC /* AutoSetCoordinatorTests.swift */; };
+		A8E9BFDF630EA67ED90C413B /* AutoWorkoutPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A1F79E67EBD82DDD671A9F2 /* AutoWorkoutPresentationTests.swift */; };
+		925E8C8B224BA914E2C813C6 /* AutoWorkoutSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419191019CA9AA90D939D856 /* AutoWorkoutSessionTests.swift */; };
+		617384D9DDF7A293DA403A85 /* AutoWorkoutProcessorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABE9599B9CFD487171B48E12 /* AutoWorkoutProcessorTests.swift */; };
+		1D336AFAB7D044C6D9081EF3 /* AutoWorkoutFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26A201F4C30436E2BF251977 /* AutoWorkoutFlowTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -180,6 +193,19 @@
 		FF250F3CBFAA370372FC2895 /* WorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Workout/WorkoutView.swift"; sourceTree = "<group>"; };
 		54DFC38F6B6BC35E07B0350A /* WorkoutFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkoutFlowTests.swift"; sourceTree = "<group>"; };
 		215055CB0485F771128546B5 /* WorkoutSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Workout/WorkoutSession.swift"; sourceTree = "<group>"; };
+		63322BFDF214297ECB8B12B9 /* AutoWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutView.swift; sourceTree = "<group>"; };
+		EBB9E52E3C97BFB928FCB208 /* AutoPatternEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoPatternEngine.swift; sourceTree = "<group>"; };
+		BB316D4A1DD6B95A07071C4C /* AutoSetCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoSetCoordinator.swift; sourceTree = "<group>"; };
+		6FE3B77F976ED2FC6EC37445 /* AutoWorkoutMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutMetrics.swift; sourceTree = "<group>"; };
+		8D5C89FD970F5AAEB669C275 /* AutoWorkoutModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutModel.swift; sourceTree = "<group>"; };
+		3A43A3CAE18E232D71A01E9B /* AutoWorkoutSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutSession.swift; sourceTree = "<group>"; };
+		A10A189C930E3938C022A289 /* AutoWorkoutTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutTypes.swift; sourceTree = "<group>"; };
+		B173E301A9A29E421DFECE96 /* AutoPatternEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoPatternEngineTests.swift; sourceTree = "<group>"; };
+		ABD8ECAE233F613A2C391EDC /* AutoSetCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoSetCoordinatorTests.swift; sourceTree = "<group>"; };
+		0A1F79E67EBD82DDD671A9F2 /* AutoWorkoutPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutPresentationTests.swift; sourceTree = "<group>"; };
+		419191019CA9AA90D939D856 /* AutoWorkoutSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutSessionTests.swift; sourceTree = "<group>"; };
+		ABE9599B9CFD487171B48E12 /* AutoWorkoutProcessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutProcessorTests.swift; sourceTree = "<group>"; };
+		26A201F4C30436E2BF251977 /* AutoWorkoutFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoWorkoutFlowTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -227,6 +253,12 @@
 		6BB698BA543A7CFA2C9FF4A6 /* LiftPodTests */ = {
 			isa = PBXGroup;
 			children = (
+				ABE9599B9CFD487171B48E12 /* AutoWorkoutProcessorTests.swift */,
+				26A201F4C30436E2BF251977 /* AutoWorkoutFlowTests.swift */,
+				419191019CA9AA90D939D856 /* AutoWorkoutSessionTests.swift */,
+				0A1F79E67EBD82DDD671A9F2 /* AutoWorkoutPresentationTests.swift */,
+				ABD8ECAE233F613A2C391EDC /* AutoSetCoordinatorTests.swift */,
+				B173E301A9A29E421DFECE96 /* AutoPatternEngineTests.swift */,
 				424BC3F60A64D037BC04C242 /* CalibrationTests.swift */,
 				54DFC38F6B6BC35E07B0350A /* WorkoutFlowTests.swift */,
 				5CEBB831C265D1D414EAEA07 /* CaptureModelTests.swift */,
@@ -294,6 +326,12 @@
 		B38B3867EF27D6543011DF9C /* ExperimentalV2 */ = {
 			isa = PBXGroup;
 			children = (
+				A10A189C930E3938C022A289 /* AutoWorkoutTypes.swift */,
+				3A43A3CAE18E232D71A01E9B /* AutoWorkoutSession.swift */,
+				8D5C89FD970F5AAEB669C275 /* AutoWorkoutModel.swift */,
+				6FE3B77F976ED2FC6EC37445 /* AutoWorkoutMetrics.swift */,
+				BB316D4A1DD6B95A07071C4C /* AutoSetCoordinator.swift */,
+				EBB9E52E3C97BFB928FCB208 /* AutoPatternEngine.swift */,
 				E3FFE24D54274F0BC22A20D1 /* DevicePathMetrics.swift */,
 				561DF79EA2AD191D1FA6F0FA /* ExperimentalV2Model.swift */,
 				1874D4E66A5BC98AD33BDC90 /* ExperimentalV2Types.swift */,
@@ -332,6 +370,7 @@
 		CCAFCE2DB26C40452ADDAAF9 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				63322BFDF214297ECB8B12B9 /* AutoWorkoutView.swift */,
 				F8E034C71FD446C4BE7EF5B6 /* ContentView.swift */,
 				417C55771C0BE91957337BE8 /* ExperimentalV2SignalLabView.swift */,
 				4BFEBEA6E650D9651D43EDAA /* LiftPodApp.swift */,
@@ -459,6 +498,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D0C062F38761C89620F24B5A /* AutoWorkoutTypes.swift in Sources */,
+				00DBD9A86FB6DCC866C38965 /* AutoWorkoutSession.swift in Sources */,
+				8D93381043159441150C28C9 /* AutoWorkoutModel.swift in Sources */,
+				6728BD1ACA1B0368F78C1F16 /* AutoWorkoutMetrics.swift in Sources */,
+				75B3A17EA98F69EDA140B950 /* AutoSetCoordinator.swift in Sources */,
+				8A1F8B795A96EE77D179FBDE /* AutoPatternEngine.swift in Sources */,
+				356961CD869EF45760CD28D6 /* AutoWorkoutView.swift in Sources */,
 				3231B86CC4252986BD1F5DDA /* CSVRecorder.swift in Sources */,
 				418C351AF8DD34F119F41B8E /* CaptureModel.swift in Sources */,
 				BF559D593E98861F697655BE /* WorkoutSession.swift in Sources */,
@@ -514,6 +560,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				617384D9DDF7A293DA403A85 /* AutoWorkoutProcessorTests.swift in Sources */,
+				1D336AFAB7D044C6D9081EF3 /* AutoWorkoutFlowTests.swift in Sources */,
+				925E8C8B224BA914E2C813C6 /* AutoWorkoutSessionTests.swift in Sources */,
+				A8E9BFDF630EA67ED90C413B /* AutoWorkoutPresentationTests.swift in Sources */,
+				50600FE827D039B699A2EBAB /* AutoSetCoordinatorTests.swift in Sources */,
+				7B35D47DC5CA54CD6A302EEF /* AutoPatternEngineTests.swift in Sources */,
 				D345C2E771771F2C202E0C06 /* CSVRecorderTests.swift in Sources */,
 				9DA48DE40ADF52BCDDD23DA2 /* CalibrationTests.swift in Sources */,
 				9712FE571D70AC3EEE0C8DB2 /* CaptureModelTests.swift in Sources */,

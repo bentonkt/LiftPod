@@ -7,6 +7,24 @@ struct ExperimentalV2SignalLabView: View {
     @State private var developerControlsExpanded = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("Set control", selection: $capture.automaticMode) {
+                Text("Manual").tag(false)
+                Text("Auto · Experimental").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .disabled(capture.automaticTrackingActive || capture.manualAnalysisActive)
+            if capture.automaticMode {
+                AutoWorkoutView(capture:capture,model:capture.autoWorkout)
+            } else { manualContent }
+        }
+        .onChange(of:model.snapshot.setState) { _, state in
+            capture.manualAnalysisActive = [.preparing,.active,.finalizing].contains(state)
+        }
+    }
+
+    private var manualContent: some View {
         List {
             setupSection
                 .disabled([.preparing, .active, .finalizing].contains(model.snapshot.setState))
@@ -30,7 +48,10 @@ struct ExperimentalV2SignalLabView: View {
         .onDisappear {
             capture.analysisEventConsumer = nil
             if [.preparing, .active, .finalizing].contains(model.snapshot.setState) {
-                Task { await model.applicationBackgrounded() }
+                Task {
+                    await model.applicationBackgrounded()
+                    capture.manualAnalysisActive = false
+                }
             }
         }
         .onChange(of: capture.monitoringActive) { _, active in
@@ -69,13 +90,18 @@ struct ExperimentalV2SignalLabView: View {
     private var lifecycleSection: some View {
         Section("Set Lifecycle") {
             Button("Start Set") {
-                Task { await model.startSet(motionActive: capture.motionUpdatesActive,
+                Task {
+                    guard !capture.automaticTrackingActive, !capture.workoutRecordingActive else { return }
+                    capture.manualAnalysisActive = true
+                    await model.startSet(motionActive: capture.motionUpdatesActive,
                                             sideVerified: capture.latestSample.map(sideMatches) ?? false,
-                                            otherRecordingActive: capture.recordingActive) }
+                                            otherRecordingActive: capture.recordingActive || capture.automaticTrackingActive || capture.workoutRecordingActive)
+                    capture.manualAnalysisActive = [.preparing,.active,.finalizing].contains(model.snapshot.setState)
+                }
             }
             .disabled(!model.canStart(motionActive: capture.motionUpdatesActive,
                                       sideVerified: capture.latestSample.map(sideMatches) ?? false,
-                                      otherRecordingActive: capture.recordingActive))
+                                      otherRecordingActive: capture.recordingActive || capture.automaticTrackingActive || capture.workoutRecordingActive))
             Button("End Set") { Task { await model.endSet() } }.disabled(model.snapshot.setState != .active)
             Button("SYNC") { Task { await model.sync() } }
                 .disabled(![.preparing, .active, .finalizing].contains(model.snapshot.setState))

@@ -60,6 +60,15 @@ struct GenericTraversal: Sendable {
     let cost: Double
 }
 
+/// Ephemeral evidence metadata. Keeping it outside recorded session types
+/// preserves every legacy replay encoding and hash.
+struct GenericTraversalProgress: Equatable, Sendable {
+    let lineage: UInt64
+    let start: Double
+    let observedAt: Double
+    let meaningfulSections: Int
+}
+
 /// Streaming DTW with explicit hold/unmatched states. A cell owns a contiguous
 /// traversal. Horizontal advances pay for ALL intervening template frames.
 struct GenericPatternTracker: Sendable {
@@ -69,6 +78,9 @@ struct GenericPatternTracker: Sendable {
         var start: Double
         var samples: Int
         var coverage: UInt64
+        var lineage: UInt64
+        var node: UInt64
+        var parent: UInt64?
     }
     let pattern: GenericPattern
     let config: GenericRepConfiguration
@@ -79,8 +91,12 @@ struct GenericPatternTracker: Sendable {
     private var quietSince: Double?
     private var unmatchedSince: Double?
     private var lastCompletion = -Double.infinity
+    private var nextLineage: UInt64 = 0
+    private var nextNode: UInt64 = 0
+    private var selectedNode: UInt64?
     private(set) var phase: Int?
     private(set) var state: GenericTrackingState = .unmatched
+    private(set) var progress: GenericTraversalProgress?
 
     init(pattern: GenericPattern, config: GenericRepConfiguration) {
         self.pattern = pattern; self.config = config
@@ -98,6 +114,8 @@ struct GenericPatternTracker: Sendable {
                 let result = pending!
                 pending = nil; cells = Array(repeating: nil, count: 64)
                 lastCompletion = result.completion; phase = nil
+                selectedNode = nil
+                progress = nil
                 if departureAllowed { seed(frame) }
                 return .init(start: result.start, completion: result.completion, detected: t, cost: result.cost)
             }
@@ -123,7 +141,12 @@ struct GenericPatternTracker: Sendable {
                 old.cost += increment; old.weight += step+1; old.samples += 1
                 if best == nil || old.cost / Double(old.weight) < best!.cost / Double(best!.weight) { best = old }
             }
-            if let best, best.cost / Double(best.weight) <= config.maximumMatchCost * 3 { next[j] = best }
+            if var best, best.cost / Double(best.weight) <= config.maximumMatchCost * 3 {
+                best.parent = best.node
+                nextNode &+= 1
+                best.node = nextNode
+                next[j] = best
+            }
         }
         cells = next
         if departureAllowed, pending == nil, t >= lastCompletion, distances[0] <= config.maximumEndpointCost {
@@ -135,9 +158,32 @@ struct GenericPatternTracker: Sendable {
             let a = cells[$0]!, b = cells[$1]!
             return a.cost / Double(a.weight) < b.cost / Double(b.weight)
         }
+        if let phase, var cell = cells[phase], frame.moving {
+            if let selectedNode, cell.parent != selectedNode {
+                nextLineage &+= 1
+                cell.lineage = nextLineage
+                cells[phase] = cell
+            }
+            selectedNode = cell.node
+            var sections = 0
+            for section in 0..<8 {
+                let range = (section * 8)..<(section * 8 + 8)
+                let visited = range.contains { cell.coverage & (UInt64(1) << $0) != 0 }
+                let dynamic = range.contains { index in
+                    index > 0 && GenericPatternMath.distance(pattern.frames[index], pattern.frames[index - 1], pattern: pattern) > 0.01
+                }
+                if visited && dynamic { sections += 1 }
+            }
+            if sections > 0 {
+                progress = .init(lineage: cell.lineage, start: cell.start,
+                                 observedAt: t, meaningfulSections: sections)
+            }
+        }
         if phase != nil {
             unmatchedSince = nil; state = .tracking
         } else {
+            progress = nil
+            selectedNode = nil
             unmatchedSince = unmatchedSince ?? t; state = .unmatched
             if t-unmatchedSince! >= config.unmatchedDuration {
                 cells = Array(repeating: nil, count: 64); phase = nil; pending = nil
@@ -154,8 +200,11 @@ struct GenericPatternTracker: Sendable {
     }
 
     private mutating func seed(_ frame: GenericMotionFrame) {
+        nextLineage &+= 1
+        nextNode &+= 1
         cells[0] = .init(cost: GenericPatternMath.distance(frame.features, pattern.frames[0], pattern: pattern),
-                         weight: 1, start: frame.time, samples: 1, coverage: 1)
+                         weight: 1, start: frame.time, samples: 1, coverage: 1,
+                         lineage: nextLineage, node: nextNode, parent: nil)
     }
 }
 
@@ -190,6 +239,7 @@ struct GenericCycleDetector: Sendable {
     private(set) var latestDecision: GenericLearningDecision?
     private(set) var state: GenericTrackingState = .learning
     var phase: Int? { tracker?.phase }
+    var progress: GenericTraversalProgress? { tracker?.progress }
     var candidateCount: Int { trials.isEmpty ? 0 : 2 }
     var retainedFrameCount: Int { history.count }
 
@@ -201,6 +251,14 @@ struct GenericCycleDetector: Sendable {
         history.removeAll(); trials.removeAll(); tracker = nil; pattern = nil
         learningEpoch += 1; epochStart = time; searchStart = time
         lastAccepted = time; state = .recovering; latestDecision = .init(timestamp: time, kind: "sourceDiscontinuity", learningEpoch: learningEpoch, pattern: nil)
+    }
+
+    mutating func boundary(at time: Double) {
+        history.removeAll(); trials.removeAll(); searchStart = time
+        epochStart = time; lastAccepted = time
+        tracker = pattern.map { .init(pattern: $0, config: configuration) }
+        state = pattern == nil ? .learning : .unmatched
+        latestDecision = .init(timestamp: time, kind: "ownershipBoundary", learningEpoch: learningEpoch, pattern: nil)
     }
 
     mutating func observe(_ frame: GenericMotionFrame, departureAllowed: Bool) -> GenericTraversal? {

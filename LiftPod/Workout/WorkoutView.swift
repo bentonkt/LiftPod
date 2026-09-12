@@ -1,4 +1,87 @@
 import SwiftUI
+import Charts
+
+private struct RepSpeedChart: View {
+    let series: RepSpeedSeries
+    var compact = false
+
+    private var comparison: String {
+        guard !series.points.isEmpty else { return "Your rep speeds will appear here" }
+        guard series.points.last?.speed != nil else { return "Latest rep speed unavailable or pending" }
+        guard let change = series.latestSlowdownPercent else { return "Baseline needs three eligible reps in this pattern" }
+        let percentage = abs(change).formatted(.number.precision(.fractionLength(0)))
+        if abs(change) < 0.5 { return "Latest rep matches baseline" }
+        return "Latest rep: \(percentage)% \(change > 0 ? "slower" : "faster") than baseline"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 7 : 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Rep speed").font(.headline)
+                Text(series.wholeCycle ? "Estimated whole-rep mean · m/s" : "Estimated lifting mean · m/s")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            plot
+            Text(comparison).font(compact ? .caption.weight(.medium) : .subheadline.weight(.medium))
+                .accessibilityIdentifier("rep-speed-comparison")
+            if !compact, let baseline = series.baseline {
+                Text("Dashed line: first 3 eligible reps in this pattern (\(baseline.formatted(.number.precision(.fractionLength(2)))) m/s)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !compact {
+                Text("Gaps mean speed is unavailable. Changes in pace do not necessarily mean fatigue.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(compact ? 12 : 18).glass(radius: compact ? 18 : 22)
+        .accessibilityIdentifier("rep-speed-chart")
+    }
+
+    private var xDomain: ClosedRange<Double> { 0.5...max(4.5, Double(series.points.count) + 0.5) }
+    private var yDomain: ClosedRange<Double> {
+        0.0...max(0.1, (series.points.compactMap(\.speed).max() ?? 0.5) * 1.2)
+    }
+    private var repTicks: [Int] {
+        Array(stride(from: 1, through: max(4, series.points.count), by: max(1, (series.points.count + 5) / 6)))
+    }
+
+    private var plot: some View {
+        Chart { marks }
+            .chartXScale(domain: xDomain)
+            .chartYScale(domain: yDomain)
+            .chartXAxis {
+                AxisMarks(values: repTicks) {
+                    AxisGridLine()
+                    AxisTick()
+                    AxisValueLabel()
+                }
+            }
+            .chartXAxisLabel("Rep number")
+            .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
+            .chartLegend(.hidden)
+            .frame(height: compact ? 92 : 160)
+            .accessibilityLabel("Estimated speed by rep. Gaps indicate unavailable measurements.")
+    }
+
+    @ChartContentBuilder private var marks: some ChartContent {
+        ForEach(series.points) { point in
+            if let speed = point.speed {
+                LineMark(x: .value("Rep", point.id), y: .value("Speed", speed),
+                         series: .value("Continuous segment", point.segment))
+                    .interpolationMethod(.linear)
+                    .foregroundStyle(LiftStyle.blue)
+                    .lineStyle(StrokeStyle(lineWidth: 2))
+                PointMark(x: .value("Rep", point.id), y: .value("Speed", speed))
+                    .foregroundStyle(LiftStyle.blue).symbolSize(32)
+            }
+        }
+        if let baseline = series.baseline {
+            RuleMark(y: .value("Baseline", baseline))
+                .foregroundStyle(Color.secondary)
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 4]))
+        }
+    }
+}
 
 private enum LiftStyle {
     static let blue = Color(red: 49 / 255, green: 91 / 255, blue: 1)
@@ -24,12 +107,14 @@ struct WorkoutView: View {
     var body: some View {
         Group {
             if developerMode {
-                ContentView(model: capture, workoutRecordingDirectory: workout.summaryURL?.deletingLastPathComponent(), toggleInterface: { developerMode = false })
+                ContentView(model: capture, workoutRecordingDirectory: workout.latestRecordingDirectory,
+                            toggleInterface: { developerMode = false })
             } else {
                 workoutInterface
             }
         }
         .task {
+            workout.bindAutoWorkout(capture)
             while !Task.isCancelled {
                 now = ProcessInfo.processInfo.systemUptime
                 await workout.checkStaleness(now: now)
@@ -40,26 +125,18 @@ struct WorkoutView: View {
 
     private var workoutInterface: some View {
         GeometryReader { geometry in
-            ScrollView {
-                VStack(spacing: 24) {
-                    header
-                    if let result = workout.result {
-                        summary(result)
-                    } else if workout.isRunning {
-                        live
-                    } else if let setResult = workout.latestSetResult {
-                        betweenSets(setResult)
-                    } else {
-                        ready
-                    }
-                    if let error = workout.error ?? capture.latestError {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.footnote).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if workout.isRunning {
+                    workoutScreenContent
+                        .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else {
+                    ScrollView {
+                        workoutScreenContent
+                            .padding(.horizontal, 26).padding(.top, 16).padding(.bottom, 24)
+                            .frame(minHeight: max(0, geometry.size.height - 110), alignment: .top)
                     }
                 }
-                .padding(.horizontal, 26).padding(.top, 16).padding(.bottom, 24)
-                .frame(minHeight: max(0, geometry.size.height - 110), alignment: .top)
             }
             .background {
                 Color.white.ignoresSafeArea()
@@ -104,7 +181,8 @@ struct WorkoutView: View {
             LiftSupportView(status: statusText) { diagnosticsPending = true; showingSupport = false }
         }
         .sheet(isPresented: $showingDiagnostics) {
-            ContentView(model: capture).safeAreaInset(edge: .bottom) {
+            ContentView(model: capture, workoutRecordingDirectory: workout.latestRecordingDirectory)
+                .safeAreaInset(edge: .bottom) {
                 Button("Done") { showingDiagnostics = false }.buttonStyle(.borderedProminent).padding()
             }
         }
@@ -126,6 +204,26 @@ struct WorkoutView: View {
         }
     }
 
+    private var workoutScreenContent: some View {
+        VStack(spacing: workout.isRunning ? 12 : 24) {
+            header
+            if let result = workout.result {
+                summary(result)
+            } else if workout.isRunning {
+                live
+            } else if let setResult = workout.latestSetResult {
+                betweenSets(setResult)
+            } else {
+                ready
+            }
+            if let error = workout.error ?? capture.latestError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 8) {
@@ -133,6 +231,7 @@ struct WorkoutView: View {
                     Text("liftpod").font(.system(size: 15, weight: .semibold))
                         .frame(minHeight: 44)
                 }.buttonStyle(.plain)
+                    .disabled(workout.automaticWorkoutActive)
                     .accessibilityLabel("Switch to developer interface")
                     .accessibilityIdentifier("interface-toggle")
                 if workout.workoutStarted {
@@ -187,8 +286,7 @@ struct WorkoutView: View {
     }
 
     private var live: some View {
-        VStack(spacing: 26) {
-            Spacer(minLength: 20)
+        VStack(spacing: 12) {
             VStack(spacing: 5) {
                 Text(workout.activePrescription.exercise.rawValue.uppercased())
                     .font(.system(size: 18, weight: .semibold)).tracking(2.2)
@@ -197,7 +295,7 @@ struct WorkoutView: View {
             }.multilineTextAlignment(.center)
             LiftHalo(reps: workout.learningMovement ? nil : workout.reps,
                      connected: signalLive, learning: workout.learningMovement)
-                .frame(maxWidth: 310).padding(.horizontal, 8)
+                .frame(maxWidth: 180).padding(.horizontal, 8)
             HStack(spacing: 8) {
                 liveMetric("SPEED", workout.liveRepSpeedMPS.map {
                     "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
@@ -209,14 +307,23 @@ struct WorkoutView: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("live-set-metrics")
+            RepSpeedChart(series: workout.repSpeedSeries, compact: true)
             VStack(spacing: 8) {
-                if workout.state == .preparing {
+                if workout.automaticWorkoutActive {
+                    Text(workout.automaticStatus)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .accessibilityIdentifier("automatic-workout-status")
+                    if workout.learningMovement {
+                        Text("Keep moving steadily. Your first reps still count.").font(.footnote)
+                    }
+                } else if workout.state == .preparing {
                     Text("Hold weight still…").font(.headline).foregroundStyle(.primary)
                     Text("Preparing the sensor").font(.footnote)
                 } else if workout.state == .finalizing {
                     Text("Finalizing measurements…").font(.headline).foregroundStyle(.primary)
                 } else if workout.learningMovement {
-                    Text("Complete a few steady reps").font(.headline).foregroundStyle(.primary)
+                    Text("Complete three steady reps").font(.headline).foregroundStyle(.primary)
                     Text("Your first reps still count.").font(.footnote)
                 } else if workout.reps == 0 {
                     Text("Ready — begin lifting").font(.headline).foregroundStyle(.primary)
@@ -228,7 +335,6 @@ struct WorkoutView: View {
                         .accessibilityIdentifier("workout-coaching-reason")
                 }
             }.font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Spacer(minLength: 12)
         }
     }
 
@@ -259,6 +365,14 @@ struct WorkoutView: View {
             VStack(alignment: .leading, spacing: 9) {
                 Text(set.interrupted ? "SET INTERRUPTED" : "SET \(workout.completedSetResults.count) COMPLETE")
                     .font(.system(size: 14, weight: .semibold)).tracking(1.8).foregroundStyle(.secondary)
+                if workout.automaticWorkoutActive {
+                    Label(workout.automaticRecoveryProvisional
+                          ? "Recovery · estimated · provisional"
+                          : "Recovery · estimated", systemImage: "waveform.path.ecg")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(LiftStyle.blue)
+                        .accessibilityIdentifier("automatic-recovery-provisional")
+                }
                 Text("\(set.reps) reps")
                     .font(.system(size: 38, weight: .semibold)).tracking(-1)
                 setSpeedReadout(set, rir: workout.latestSetRIRDescription, showsRIR: true).font(.subheadline)
@@ -292,6 +406,13 @@ struct WorkoutView: View {
                 }
             }.padding(18).glass(radius: 22)
             nextSetCard
+            if workout.automaticWorkoutActive {
+                Text(workout.automaticStatus)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .accessibilityIdentifier("automatic-workout-status")
+            }
             Spacer(minLength: 12)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -361,6 +482,8 @@ struct WorkoutView: View {
     @ViewBuilder private var bottomControls: some View {
         if workout.result != nil {
             Button("Done") { workout.reset() }.buttonStyle(LiftPrimaryStyle())
+        } else if workout.automaticWorkoutActive {
+            automaticBottomControls
         } else if workout.isRunning {
             if workout.state == .preparing {
                 Button("Cancel") { Task { await workout.cancelPreparation() } }
@@ -391,12 +514,54 @@ struct WorkoutView: View {
             }
         } else {
             Button(primaryLabel) {
-                if !capture.monitoringActive { capture.startMotion() }
-                else if !workout.prescription.isValid || !workout.supportedExercise { showingSetup = true }
-                else { Task { await workout.startSet(capture) } }
+                if workout.automaticSets {
+                    if needsSetup { showingSetup = true }
+                    else { Task { await workout.startAutomaticWorkout(capture) } }
+                } else if !capture.monitoringActive {
+                    capture.startMotion()
+                } else if needsSetup {
+                    showingSetup = true
+                } else {
+                    Task { await workout.startSet(capture) }
+                }
             }.buttonStyle(LiftPrimaryStyle())
-                .disabled(capture.monitoringActive && !needsSetup && (!signalLive || capture.recordingActive))
+                .disabled(primaryDisabled)
                 .accessibilityIdentifier("start-set")
+        }
+    }
+
+    private var automaticBottomControls: some View {
+        VStack(spacing: 10) {
+            if workout.isRunning {
+                Button("End Set Now") { Task { await capture.endAutoSet() } }
+                    .buttonStyle(LiftPrimaryStyle())
+                    .disabled(workout.automaticState != .running || workout.reps == 0)
+                    .accessibilityIdentifier("end-set")
+            } else {
+                Text(workout.automaticStatus)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .accessibilityIdentifier("automatic-workout-status")
+            }
+            HStack(spacing: 10) {
+                Button(automaticTrackingControlTitle) {
+                    Task {
+                        if [.paused, .suspended].contains(workout.automaticState) {
+                            await workout.resumeAutomaticTracking()
+                        } else {
+                            await workout.pauseAutomaticTracking()
+                        }
+                    }
+                }
+                .buttonStyle(LiftPrimaryStyle(secondary: true))
+                .disabled(![.running, .paused, .suspended].contains(workout.automaticState))
+                .accessibilityIdentifier("automatic-tracking-toggle")
+                Button("Finish Workout") { Task { await workout.finishAutomaticWorkout() } }
+                    .buttonStyle(LiftPrimaryStyle(secondary: true))
+                    .accessibilityIdentifier("finish-workout")
+            }
         }
     }
 
@@ -496,6 +661,19 @@ struct WorkoutView: View {
     private var setupSheet: some View {
         NavigationStack {
             Form {
+                Section("Set control") {
+                    Picker("Set control", selection: $workout.automaticSets) {
+                        Text("Automatic").tag(true)
+                        Text("Manual").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(workout.workoutStarted || workout.automaticWorkoutActive)
+                    Text(workout.automaticSets
+                         ? "LiftPod detects supported sets and recovery while the app stays open. You can still end a set or finish the workout at any time."
+                         : "Start and end each set explicitly.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 Section("Workout") {
                     Picker("Exercise", selection: $workout.prescription.exercise) {
                         ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
@@ -530,10 +708,15 @@ struct WorkoutView: View {
                         Text("Use a secure, consistent mounting orientation. LiftPod learns the repeated movement within each set.")
                             .font(.footnote)
                     }
-                    Section { Button("Open diagnostics") { diagnosticsPending = true; showingSetup = false } }
+                    Section {
+                        Button("Open diagnostics") { diagnosticsPending = true; showingSetup = false }
+                            .disabled(workout.automaticWorkoutActive)
+                    }
                 }
                 Section {
-                    Text("Start and end each set explicitly. RIR and available weight increments guide the next set.")
+                    Text(workout.automaticSets
+                         ? "Set boundaries and recovery are estimated. RIR and available weight increments guide the next set."
+                         : "Start and end each set explicitly. RIR and available weight increments guide the next set.")
                     if !workout.prescription.isValid { Text("Enter a valid rep range and, optionally, a weight from 0 to 1,000 lb.").foregroundStyle(.orange) }
                 }.font(.footnote)
             }
@@ -561,6 +744,7 @@ struct WorkoutView: View {
     }
     private var signalLive: Bool { liveSensor == .rightHeadphone }
     private var statusText: String {
+        if workout.automaticWorkoutActive { return workout.automaticStatus }
         if let sensor = liveSensor {
             switch sensor {
             case .rightHeadphone: return "Right AirPod live"
@@ -572,6 +756,13 @@ struct WorkoutView: View {
         return capture.monitoringActive ? "Waiting for motion…" : "AirPod not connected"
     }
     private var readyInstruction: String {
+        if workout.automaticWorkoutActive { return workout.automaticStatus }
+        if workout.automaticSets {
+            if capture.recordingActive || capture.manualAnalysisActive {
+                return "Finish the other recording or analysis session before starting Auto."
+            }
+            return "Secure the right AirPod in the mount. LiftPod will detect supported sets and recovery automatically."
+        }
         if capture.recordingActive { return "Stop raw recording in diagnostics to begin." }
         if !capture.monitoringActive { return "Connect your AirPod to begin." }
         if liveSensor == .leftHeadphone {
@@ -584,7 +775,17 @@ struct WorkoutView: View {
         return "Secure the AirPod in the mount, then start your set."
     }
     private var primaryLabel: String {
-        !capture.monitoringActive ? "Connect AirPod" : (needsSetup ? "Review setup" : "Start First Set")
+        if workout.automaticSets { return needsSetup ? "Review Setup" : "Start Workout" }
+        return !capture.monitoringActive ? "Connect AirPod" : (needsSetup ? "Review setup" : "Start First Set")
+    }
+    private var primaryDisabled: Bool {
+        if workout.automaticSets {
+            return !needsSetup && (capture.recordingActive || capture.manualAnalysisActive || capture.automaticTrackingActive)
+        }
+        return capture.monitoringActive && !needsSetup && (!signalLive || capture.recordingActive)
+    }
+    private var automaticTrackingControlTitle: String {
+        [.paused, .suspended].contains(workout.automaticState) ? "Resume Tracking" : "Pause Tracking"
     }
     private var statusPill: some View {
         HStack(spacing: 7) {
@@ -842,14 +1043,14 @@ private struct LiftHalo: View {
                 VStack(spacing: 6) {
                     Text("—")
                         .font(.system(size: 86, weight: .medium))
-                    Text("LEARNING MOVEMENT")
+                    Text("Detecting exercise...")
                         .font(.system(size: 11, weight: .semibold))
-                        .tracking(1.5)
+                        .tracking(0.8)
                         .foregroundStyle(.secondary)
                 }
                 .padding(40)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Learning movement. Complete a few steady reps. Your first reps still count.")
+                .accessibilityLabel("Detecting exercise. Complete three steady reps. Your first reps still count.")
                 .accessibilityIdentifier("workout-learning-movement")
             } else if let reps {
                 VStack(spacing: 2) {
