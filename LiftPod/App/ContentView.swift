@@ -4,9 +4,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @ObservedObject var model: CaptureModel
     @StateObject private var offlineModel = OfflinePreprocessingModel()
-    @StateObject private var experimentalModel = ExperimentalV1Model()
     @State private var showingRawCSVImporter = false
-    @State private var showingExperimentalCSVImporter = false
 
     var body: some View {
         NavigationStack {
@@ -15,17 +13,8 @@ struct ContentView: View {
                 controlsSection
                 sampleSection
                 offlinePreprocessingSection
-                experimentalV1Section
+                experimentalV2Section
                 guidanceSection
-            }
-            .fileImporter(
-                isPresented: $showingExperimentalCSVImporter,
-                allowedContentTypes: [.commaSeparatedText, .plainText]
-            ) { selection in
-                switch selection {
-                case let .success(url): experimentalModel.importRawCSV(url)
-                case let .failure(error): experimentalModel.handleImportFailure(error)
-                }
             }
             .navigationTitle("AirPods Motion")
             .fileImporter(
@@ -42,41 +31,13 @@ struct ContentView: View {
         }
     }
 
-    private var experimentalV1Section: some View {
-        Section("Experimental V1 Rep Detection") {
-            Button("Select V1 Raw CSV") { showingExperimentalCSVImporter = true }
-            statusRow("Recording", experimentalModel.sourceFilename ?? "None", id: "v1-source-file")
-            Picker("Exercise", selection: $experimentalModel.selectedExercise) {
-                ForEach(ExperimentalExercise.allCases) { Text($0.rawValue).tag($0) }
+    private var experimentalV2Section: some View {
+        Section("Experimental Signal Analysis") {
+            NavigationLink("Experimental V2 Signal Lab") {
+                ExperimentalV2SignalLabView(capture: model)
             }
-            Picker("Expected AirPod", selection: $experimentalModel.expectedSensorSide) {
-                ForEach(ExperimentalSensorSide.allCases) { Text($0.rawValue.capitalized).tag($0) }
-            }
-            Button("Run V1 Detection") { Task { await experimentalModel.run() } }
-                .disabled(experimentalModel.sourceFilename == nil || experimentalModel.state == .running)
-            statusRow("State", experimentalModel.state.rawValue, id: "v1-state")
-            if let result = experimentalModel.result {
-                statusRow("Committed reps", String(result.committedCount), id: "v1-count")
-                statusRow("Final quality", result.finalQuality.rawValue, id: "v1-quality")
-                statusRow("Candidates", String(result.provisionalCount + result.committedCount), id: "v1-candidates")
-                statusRow("Rejections", String(result.rejectedCount), id: "v1-rejections")
-                ForEach(result.candidates) { candidate in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(candidate.exercise.rawValue): \(candidate.disposition.rawValue)")
-                        Text("\(number(candidate.completionTimestamp)) s · \(number(candidate.duration)) s" +
-                             (candidate.rejectionReason.map { " · \($0.rawValue)" } ?? ""))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            if let error = experimentalModel.latestError {
-                Text(error).foregroundStyle(.red).accessibilityIdentifier("v1-error")
-            }
-            if let urls = experimentalModel.exportURLs {
-                ShareLink(items: [urls.summary, urls.replayTrace]) {
-                    Label("Export V1 Results", systemImage: "square.and.arrow.up")
-                }
-            }
+            Text("Live set lifecycle, local-cycle diagnostics, recording, replay, and calibration tools.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

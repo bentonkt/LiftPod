@@ -53,7 +53,7 @@ struct ExperimentalProfile: Codable, Sendable, Equatable {
     }
 }
 
-struct ExperimentalV1Configuration: Codable, Sendable, Equatable {
+struct MotionResamplingConfiguration: Codable, Sendable, Equatable {
     var outputRate = 50.0
     var outputInterval = 0.020
     var maximumInterpolationGap = 0.060
@@ -110,6 +110,9 @@ struct ExperimentalV1Configuration: Codable, Sendable, Equatable {
     }
 }
 
+// Retained so archived Experimental V1 recordings and tests continue to decode and replay.
+typealias ExperimentalV1Configuration = MotionResamplingConfiguration
+
 struct BiquadConfiguration: Codable, Sendable, Equatable {
     let b0: Double
     let b1: Double
@@ -118,6 +121,14 @@ struct BiquadConfiguration: Codable, Sendable, Equatable {
     let a2: Double
 
     static let v1 = Self(
+        b0: 0.04613180209331292,
+        b1: 0.09226360418662584,
+        b2: 0.04613180209331292,
+        a1: -1.3072850288493234,
+        a2: 0.49181223722257517
+    )
+
+    static let v2Fixed4Hz = Self(
         b0: 0.04613180209331292,
         b1: 0.09226360418662584,
         b2: 0.04613180209331292,
