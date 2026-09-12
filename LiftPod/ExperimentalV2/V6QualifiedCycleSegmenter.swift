@@ -53,6 +53,9 @@ struct V6QualifiedCycleSegmenter: Sendable {
     private var topQuietSince: Double?
     private var last: Point?
     private var previouslyAdmitted = false
+    private var recoveryBottom: Point?
+    private var recoveryTail: [Point] = []
+    private var recoverySawReturn = false
 
     init(profile: V2DSPProfile) {
         self.profile = profile
@@ -121,6 +124,33 @@ struct V6QualifiedCycleSegmenter: Sendable {
                 recovering = false
                 state = .ready
                 evidenceRuns.removeAll()
+                recoveryBottom = nil; recoveryTail.removeAll(); recoverySawReturn = false
+            } else if profile.identity.algorithm == .gravityTilt {
+                // A quick returned valley need not contain three still samples.
+                // Qualify it from observed return plus a persistent new departure,
+                // retaining the valley samples rather than stitching the rejected top.
+                if compatible(signal), departureAllowed {
+                    if let bottom = recoveryBottom, timestamp - bottom.time > timing.maximumCycleDuration {
+                        recoveryBottom = nil; recoveryTail.removeAll(); recoverySawReturn = false
+                        evidenceRuns["recoveryDeparture"] = 0
+                    }
+                    if let previous, signal < previous.signal { recoverySawReturn = true }
+                    if recoveryBottom == nil || signal < recoveryBottom!.signal {
+                        recoveryBottom = point; recoveryTail = [point]
+                    } else { recoveryTail.append(point) }
+                    if let bottom = recoveryBottom,
+                       evidence(recoverySawReturn && signal - bottom.signal >= configuration.leaveStart,
+                                key: "recoveryDeparture") {
+                        self.bottom = (bottom.signal, bottom.time)
+                        bottomQualified = true; recovering = false
+                        let tail = recoveryTail
+                        recoveryBottom = nil; recoveryTail.removeAll(); recoverySawReturn = false
+                        begin(tail)
+                    }
+                } else {
+                    recoveryBottom = nil; recoveryTail.removeAll(); recoverySawReturn = false
+                    evidenceRuns["recoveryDeparture"] = 0
+                }
             }
         case .ready:
             if signal < -configuration.trainedSpan * configuration.maximumDeeperReturnFraction { seek(); break }
@@ -144,6 +174,9 @@ struct V6QualifiedCycleSegmenter: Sendable {
             if top == nil || signal > top!.value { top = (signal, timestamp) }
             guard let bottom, let top else { break }
             let enough = top.value - bottom.value >= configuration.minimumOutboundExcursion
+            if profile.identity.algorithm == .gravityTilt, !enough, turning {
+                return reject(.insufficientExcursion)
+            }
             let lowMotion = enough && gyroMagnitude <= configuration.gyroscopeQuietThreshold &&
                 abs(signal - (previous?.signal ?? signal)) <= reversal && top.value - signal <= reversal
             if lowMotion { topQuietSince = topQuietSince ?? timestamp } else { topQuietSince = nil }
@@ -234,6 +267,7 @@ struct V6QualifiedCycleSegmenter: Sendable {
         bottom = nil; top = nil; returned = nil; cycle.removeAll(keepingCapacity: true)
         preDeparture.removeAll(keepingCapacity: true); evidenceRuns.removeAll()
         quietSince = nil; quietValues.removeAll(); topQuietSince = nil
+        recoveryBottom = nil; recoveryTail.removeAll(); recoverySawReturn = false
     }
 
     private mutating func reject(_ reason: V2RejectionReason) -> V6SegmenterUpdate {
@@ -261,7 +295,14 @@ struct V6QualifiedCycleSegmenter: Sendable {
         if let reason = validate(result) { return reject(reason) }
         let successor = cycle.filter { $0.time >= returned.time }
         seek(); recovering = false; self.bottom = (returned.value, returned.time); bottomQualified = true; state = .ready
-        if carry, successor.count > 1 { begin(successor) }
+        if carry, successor.count > 1 {
+            if profile.identity.algorithm == .gravityTilt {
+                // A confirmed bottom reversal is not yet a qualified departure.
+                // Retain its samples, but require the usual hysteresis before
+                // creating a successor. Small settling bumps must not own a top.
+                preDeparture = successor
+            } else { begin(successor) }
+        }
         return .init(cycle: result, rejection: nil)
     }
 

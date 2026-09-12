@@ -14,6 +14,7 @@ enum V6Algorithm: String, Codable, CaseIterable, Sendable {
     case fixedAxisAngular = "fixed-axis-angular-v5"
     case adaptiveAxis = "adaptive-axis-v6"
     case adaptiveAxisV7 = "adaptive-axis-v7"
+    case gravityTilt = "gravity-tilt-v1"
 }
 enum V2ValidationStatus: String, Codable, Sendable { case experimental, importedUnvalidated, generatedUnvalidated, validated }
 enum V2AuthorizationSource: String, Codable, Sendable { case manual }
@@ -30,6 +31,14 @@ enum V2RejectionReason: String, Codable, Sendable {
     case invalidOrdering, invalidDuration, excessivePause, discontinuity, ambiguousTemplate
     case templateCost, negativeMargin, endpointMismatch, phaseEvidence, nonFiniteEvidence
     case ambiguousReversal, angularReferenceAmbiguous, insufficientAxisEnergy, outsideActiveSet
+    case inconsistentDirection
+}
+
+struct V6GravityTiltConfiguration: Codable, Sendable, Equatable {
+    var maximumDirectionDifference = 0.20
+    var minimumDirectionDisplacement = 0.10
+    var directionApexFraction = 0.80
+    var maximumPreparationVariation = 0.12
 }
 
 struct V6AngularConfiguration: Codable, Sendable, Equatable {
@@ -163,6 +172,7 @@ struct V2DSPIdentity: Codable, Sendable, Equatable {
     var algorithm: V6Algorithm = .qualifiedLocalCycle
     var angular: V6AngularConfiguration? = nil
     var adaptiveAxis: V6AdaptiveAxisConfiguration? = nil
+    var gravityTilt: V6GravityTiltConfiguration? = nil
 }
 
 struct V2DSPProfile: Codable, Sendable, Equatable, Identifiable {
@@ -230,6 +240,15 @@ struct V2DSPProfile: Codable, Sendable, Equatable, Identifiable {
             _ = try i.positiveTemplates.map { try $0.validated(configuration: i.templateConfiguration) }
             _ = try i.negativeTemplates.map { try $0.validated(configuration: i.templateConfiguration) }
         }
+        if i.algorithm == .gravityTilt {
+            guard i.profileVersion == "experimental-v6", i.kind == .localCycle, let tilt = i.gravityTilt,
+                  tilt.maximumDirectionDifference.isFinite, (0.01...0.5).contains(tilt.maximumDirectionDifference),
+                  tilt.minimumDirectionDisplacement.isFinite, (0.01...0.3).contains(tilt.minimumDirectionDisplacement),
+                  tilt.directionApexFraction.isFinite, (0.5...1).contains(tilt.directionApexFraction),
+                  tilt.maximumPreparationVariation.isFinite, (0.01...0.3).contains(tilt.maximumPreparationVariation) else {
+                throw V2Error.invalidProfile("Invalid gravity-tilt configuration")
+            }
+        } else if i.gravityTilt != nil { throw V2Error.invalidProfile("Unexpected gravity-tilt configuration") }
         return self
     }
 

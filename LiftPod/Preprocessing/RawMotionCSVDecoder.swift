@@ -212,9 +212,9 @@ struct RawMotionCSVDecoder: Sendable {
 
     private func sensorLocation(from value: String, line: Int) throws -> HeadphoneSensorLocation {
         switch value {
-        case HeadphoneSensorLocation.leftHeadphone.description:
+        case HeadphoneSensorLocation.leftHeadphone.description, "left":
             return .leftHeadphone
-        case HeadphoneSensorLocation.rightHeadphone.description:
+        case HeadphoneSensorLocation.rightHeadphone.description, "right":
             return .rightHeadphone
         case HeadphoneSensorLocation.default.description:
             return .default
