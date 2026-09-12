@@ -3,12 +3,13 @@ import XCTest
 
 final class WorkoutSummaryTests: XCTestCase {
     func testTwentyRepsWithoutSpeedRecommendOneHeavierStepAndRest() throws {
-        let result = WorkoutSetResult(id: UUID(), prescription: .init(), reps: 20,
+        let result = WorkoutSetResult(id: UUID(), prescription: weightedPrescription(), reps: 20,
             averageRepDuration: nil, movementDuration: nil, interrupted: false, finishedAt: Date())
         let plan = WorkoutCoach.nextSetPlan(for: result)
         XCTAssertEqual(plan.action, .considerHeavierLoad)
         XCTAssertEqual(plan.title, "30 lb × 8")
-        XCTAssertTrue(plan.explanation.contains("Low confidence"))
+        XCTAssertFalse(plan.explanation.localizedCaseInsensitiveContains("confidence"))
+        XCTAssertFalse(plan.explanation.localizedCaseInsensitiveContains("heuristic"))
         let rest = try XCTUnwrap(RestRecommendation(reps: 20, repsInReserve: nil))
         XCTAssertEqual(rest.seconds, 150)
         XCTAssertEqual(rest.basis, .repHeuristic)
@@ -32,7 +33,7 @@ final class WorkoutSummaryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file) }
         let store = WorkoutHistoryStore(fileURL: file)
         for index in 0..<2 {
-            let set = SessionSet(id: "set-\(index)", prescription: .init(),
+            let set = SessionSet(id: "set-\(index)", prescription: weightedPrescription(),
                 reps: [.init(id: "rep-\(index)", start: 0, end: 2)])
             let draft = SetReviewDraft(sessionID: UUID(), set: set,
                 endedAt: Date(timeIntervalSince1970: Double(index)))
@@ -143,7 +144,7 @@ final class WorkoutSummaryTests: XCTestCase {
 
 final class ManualWorkoutFlowTests: XCTestCase {
     func testManualPolicyIgnoresTimeAndStartsNextSetOnlyAfterExplicitBoundary() {
-        var session = WorkoutSessionReducer(prescription: .init())
+        var session = WorkoutSessionReducer(prescription: weightedPrescription())
         session.apply(.rep(.init(id: "one", start: 0, end: 2)))
         session.apply(.clock(100))
         session.apply(.rep(.init(id: "two", start: 100, end: 102)))
@@ -171,11 +172,11 @@ final class ManualWorkoutFlowTests: XCTestCase {
             ingestSequence: 1, setState: .active, quality: .usable, detectorPhase: .ready,
             committedCount: 5, reference: nil, filteredSignal: nil, landmarks: .init(),
             recentEvents: [], metrics: metrics)
-        let coaching = WorkoutCoach.evaluate(snapshot: snapshot, reps: 8, prescription: .init())
+        let coaching = WorkoutCoach.evaluate(snapshot: snapshot, reps: 8, prescription: weightedPrescription())
         XCTAssertEqual(coaching.state, .steady)
         XCTAssertGreaterThan(coaching.slowdownPercent ?? 0, 10)
 
-        var result = WorkoutSetResult(id: setID, prescription: .init(), reps: 8,
+        var result = WorkoutSetResult(id: setID, prescription: weightedPrescription(), reps: 8,
                                       averageRepDuration: nil, movementDuration: nil,
                                       interrupted: false, finishedAt: Date(),
                                       slowdownPercent: coaching.slowdownPercent, coaching: coaching)
@@ -188,9 +189,9 @@ final class ManualWorkoutFlowTests: XCTestCase {
             ingestSequence: 1, setState: .active, quality: .stale, detectorPhase: .recovering,
             committedCount: 4, reference: nil, filteredSignal: nil, landmarks: .init(),
             recentEvents: [], qualityDetail: "Motion stream is stale", isRecovering: true)
-        let coaching = WorkoutCoach.evaluate(snapshot: snapshot, reps: 4, prescription: .init())
+        let coaching = WorkoutCoach.evaluate(snapshot: snapshot, reps: 4, prescription: weightedPrescription())
         XCTAssertEqual(coaching.state, .unavailable)
-        let result = WorkoutSetResult(id: UUID(), prescription: .init(), reps: 4,
+        let result = WorkoutSetResult(id: UUID(), prescription: weightedPrescription(), reps: 4,
                                       averageRepDuration: nil, movementDuration: nil,
                                       interrupted: true, finishedAt: Date(), coaching: coaching)
         XCTAssertEqual(WorkoutCoach.nextSetPlan(for: result).action, .keepLoad)
@@ -201,7 +202,7 @@ final class ManualWorkoutFlowTests: XCTestCase {
             state: .targetReached, slowdownPercent: 4,
             explanation: "You reached the top of your target range.", evidenceIsValid: true)
         let result = WorkoutSetResult(
-            id: UUID(), prescription: .init(), reps: 12,
+            id: UUID(), prescription: weightedPrescription(), reps: 12,
             averageRepDuration: nil, movementDuration: nil,
             interrupted: false, finishedAt: Date(), slowdownPercent: 4, coaching: coaching)
 
@@ -211,7 +212,7 @@ final class ManualWorkoutFlowTests: XCTestCase {
     func testGenericVelocityProfileDrivesTheSameCoachingStates() throws {
         let profile = SetVelocityProfile(meanLiftingSpeeds: [1.0, 0.98, 0.96, 0.8])
         let coaching = WorkoutCoach.evaluate(
-            velocityProfile: profile, reps: 4, prescription: .init())
+            velocityProfile: profile, reps: 4, prescription: weightedPrescription())
 
         XCTAssertEqual(coaching.state, .steady)
         XCTAssertGreaterThan(try XCTUnwrap(coaching.slowdownPercent), 0)
@@ -237,8 +238,10 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         provider.emit(.sample(experimentalRawSample(index: 0, time: 0,
             receiptTime: ProcessInfo.processInfo.systemUptime)))
         for _ in 0..<1000 { if capture.latestSample != nil { break }; await Task.yield() }
+        model.prescription.loadLB = 25
         await model.start(capture)
         XCTAssertEqual(model.state, .active)
+        XCTAssertTrue(model.learningMovement)
         model.prescription.loadLB = 40
         // Repeated physical cycles teach and exercise the default generic detector.
         func raw(_ index: Int) -> RawMotionSample {
@@ -251,6 +254,7 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         for index in 0...510 { await model.ingest(raw(index)) }
         XCTAssertEqual(model.state, .active)
         XCTAssertGreaterThan(model.reps, 0)
+        XCTAssertFalse(model.learningMovement)
         XCTAssertNotNil(model.currentPace)
         XCTAssertGreaterThan(model.activeTime, 0)
         XCTAssertLessThan(model.activeTime, model.elapsedTime)
@@ -262,9 +266,13 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertEqual(setResult.prescription.loadLB, 25)
         XCTAssertFalse(setResult.interrupted)
         XCTAssertGreaterThan(try XCTUnwrap(setResult.peakSpeedMPS), 0)
+        XCTAssertGreaterThan(try XCTUnwrap(setResult.averageSpeedMPS), 0)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(setResult.averageSpeedMPS),
+                                 try XCTUnwrap(setResult.peakSpeedMPS))
         let roundTrip = try JSONDecoder().decode(WorkoutSetResult.self,
             from: JSONEncoder().encode(setResult))
         XCTAssertEqual(roundTrip.peakSpeedMPS, setResult.peakSpeedMPS)
+        XCTAssertEqual(roundTrip.averageSpeedMPS, setResult.averageSpeedMPS)
         XCTAssertEqual(roundTrip.slowdownPercent, setResult.slowdownPercent)
         XCTAssertEqual(model.completedSetResults.count, 1)
         await model.analyzeLatestSet(model: "", apiKey: "")
@@ -358,6 +366,10 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
 
     func testPrimaryWorkoutSupportsEveryExerciseWithGenericCounting() {
         let model = WorkoutModel()
+        XCTAssertEqual(V2Exercise.allCases.map(\.rawValue), [
+            "RDL", "Goblet Squat", "Chest Press", "Overhead Press", "Lateral Raise",
+            "Biceps Curl", "External Rotation", "Skull Crusher", "Lunge", "Bent Over Rows"
+        ])
         for exercise in V2Exercise.allCases {
             model.prescription.exercise = exercise
             XCTAssertTrue(model.supportedExercise)
@@ -447,10 +459,10 @@ final class WorkoutHistoryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file) }
         let store = WorkoutHistoryStore(fileURL: file)
         let sessionID = UUID()
-        let first = SessionSet(id: "set-1", prescription: .init(), reps: (0..<10).map {
+        let first = SessionSet(id: "set-1", prescription: weightedPrescription(), reps: (0..<10).map {
             .init(id: "a-\($0)", start: Double($0 * 3), end: Double($0 * 3 + 2))
         })
-        let second = SessionSet(id: "set-2", prescription: .init(), reps: (0..<8).map {
+        let second = SessionSet(id: "set-2", prescription: weightedPrescription(), reps: (0..<8).map {
             .init(id: "b-\($0)", start: Double(200 + $0 * 3), end: Double(202 + $0 * 3))
         })
         XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: sessionID, set: first),
@@ -462,7 +474,7 @@ final class WorkoutHistoryTests: XCTestCase {
         XCTAssertEqual(store.restRecommendation(after: current)?.seconds, 220)
 
         let changedLoad = SetReviewDraft(sessionID: sessionID,
-                                         set: SessionSet(id: "set-3", prescription: .init(),
+                                         set: SessionSet(id: "set-3", prescription: weightedPrescription(),
                                              reps: second.reps),
                                          precedingSetID: second.id, precedingRestSeconds: 180)
         XCTAssertTrue(store.confirm(changedLoad, loadLB: 35, reps: 6, repsInReserve: 0))
@@ -507,13 +519,13 @@ final class WorkoutHistoryTests: XCTestCase {
             let reps = (0..<6).map {
                 SessionRep(id: "set-\(setIndex)-rep-\($0)", start: Double($0 * 3), end: Double($0 * 3 + 2))
             }
-            let set = SessionSet(id: "set-\(setIndex)", prescription: .init(), reps: reps)
+            let set = SessionSet(id: "set-\(setIndex)", prescription: weightedPrescription(), reps: reps)
             let draft = SetReviewDraft(sessionID: UUID(), set: set, velocityProfile: profile)
             XCTAssertTrue(store.confirm(draft, loadLB: 30, reps: 6, repsInReserve: 0))
         }
         let current = SetVelocityProfile(meanLiftingSpeeds: [0.9, 0.81, 0.72, 0.63])
         let estimate = try XCTUnwrap(store.automaticRIR(for: .bicepsCurl, completedReps: 4,
-                                                        velocityProfile: current))
+                                                        velocityProfile: current, loadLB: 30))
         XCTAssertEqual(estimate.repsInReserve, 2)
         XCTAssertEqual(estimate.method, .individualized)
         XCTAssertEqual(estimate.confidence, .low)
@@ -525,7 +537,7 @@ final class WorkoutHistoryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("workouts.json")
         let store = WorkoutHistoryStore(fileURL: file)
-        let set = SessionSet(id: "set-1", prescription: .init(),
+        let set = SessionSet(id: "set-1", prescription: weightedPrescription(),
                              reps: [.init(id: "rep-1", start: 0, end: 2)])
         let draft = SetReviewDraft(sessionID: UUID(), set: set,
                                    endedAt: Date(timeIntervalSince1970: 1_700_000_000))
@@ -544,7 +556,7 @@ final class WorkoutHistoryTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
         defer { try? FileManager.default.removeItem(at: file) }
         let store = WorkoutHistoryStore(fileURL: file)
-        let set = SessionSet(id: "set-1", prescription: .init(),
+        let set = SessionSet(id: "set-1", prescription: weightedPrescription(),
                              reps: [.init(id: "rep-1", start: 0, end: 2)])
         let draft = SetReviewDraft(sessionID: UUID(), set: set)
         XCTAssertTrue(store.confirm(draft, loadLB: 30, reps: 10, repsInReserve: 4))
@@ -563,7 +575,7 @@ final class WorkoutHistoryTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
         defer { try? FileManager.default.removeItem(at: file) }
         let store = WorkoutHistoryStore(fileURL: file)
-        let set = SessionSet(id: "set-1", prescription: .init(),
+        let set = SessionSet(id: "set-1", prescription: weightedPrescription(),
                              reps: [.init(id: "rep-1", start: 0, end: 2)])
         XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: UUID(), set: set),
                                     loadLB: 30, reps: 12, repsInReserve: nil))
@@ -577,7 +589,7 @@ final class WorkoutHistoryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file) }
         let store = WorkoutHistoryStore(fileURL: file)
         for index in 0..<3 {
-            let set = SessionSet(id: "set-\(index)", prescription: .init(),
+            let set = SessionSet(id: "set-\(index)", prescription: weightedPrescription(),
                                  reps: [.init(id: "rep-\(index)", start: 0, end: 2)])
             XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: UUID(), set: set,
                 endedAt: Date().addingTimeInterval(Double(index))),
@@ -596,7 +608,7 @@ final class WorkoutHistoryTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
         defer { try? FileManager.default.removeItem(at: file) }
         let store = WorkoutHistoryStore(fileURL: file)
-        let set = SessionSet(id: "set-1", prescription: .init(),
+        let set = SessionSet(id: "set-1", prescription: weightedPrescription(),
                              reps: [.init(id: "rep-1", start: 0, end: 2)])
         XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: UUID(), set: set),
                                     loadLB: 30, reps: 10, repsInReserve: 2))
@@ -612,7 +624,7 @@ final class WorkoutHistoryTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
         defer { try? FileManager.default.removeItem(at: file) }
         let store = WorkoutHistoryStore(fileURL: file)
-        let set = SessionSet(id: "set-1", prescription: .init(),
+        let set = SessionSet(id: "set-1", prescription: weightedPrescription(),
                              reps: [.init(id: "rep-1", start: 0, end: 2)])
         XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: UUID(), set: set),
                                     loadLB: 30, reps: 8, repsInReserve: 0))
@@ -628,7 +640,7 @@ final class WorkoutHistoryTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
         defer { try? FileManager.default.removeItem(at: file) }
         let store = WorkoutHistoryStore(fileURL: file)
-        let set = SessionSet(id: "set-1", prescription: .init(),
+        let set = SessionSet(id: "set-1", prescription: weightedPrescription(),
                              reps: [.init(id: "rep-1", start: 0, end: 2)])
         XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: UUID(), set: set),
                                     loadLB: 30, reps: 6, repsInReserve: 4))
@@ -707,7 +719,7 @@ final class AutomaticSetBoundaryTests: XCTestCase {
     }
 
     func testInterruptionAndReplayPreserveSetsAndFrozenInputs() throws {
-        let original = WorkoutPrescription()
+        let original = weightedPrescription()
         var session = automaticSession()
         session.apply(.rep(.init(id: "one", start: 0, end: 2)))
         var changed = original; changed.loadLB = 40
@@ -725,7 +737,7 @@ final class AutomaticSetBoundaryTests: XCTestCase {
 
     private func automaticSession() -> WorkoutSessionReducer {
         WorkoutSessionReducer(
-            prescription: .init(),
+            prescription: weightedPrescription(),
             policy: .init(version: "automatic-sets-v1", inactivitySeconds: 12)
         )
     }
@@ -872,7 +884,7 @@ final class RIRReliabilityTests: XCTestCase {
 
     func testLatestMetricRevisionAndMixedEpochsAreRejected() {
         let reps = (0..<4).map { SessionRep(id: "\($0)", start: Double($0 * 3), end: Double($0 * 3 + 2)) }
-        let set = SessionSet(id: "set", prescription: .init(), reps: reps)
+        let set = SessionSet(id: "set", prescription: weightedPrescription(), reps: reps)
         var metrics = reps.map { rep in
             var metric = GenericCycleMetrics(id: rep.id, learningEpoch: 1)
             metric.status = .available; metric.meanSpeed = 1
@@ -889,6 +901,21 @@ final class RIRReliabilityTests: XCTestCase {
 }
 
 final class AIWorkoutCoachTests: XCTestCase {
+    func testUnknownWeightAllowsNotesButDisallowsInventedLoad() throws {
+        let measured = input()
+        let request = AISetRequest(prescription: .init(), reps: measured.reps,
+            speedDegradationPercent: measured.speedDegradationPercent,
+            speedMeasurement: measured.speedMeasurement, signalUsable: true, interrupted: false)
+        let schema = try AIWorkoutCoach.responseSchema(for: request)
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        XCTAssertEqual((properties["nextSet"] as? [String: Any])?["type"] as? String, "null")
+        let advice = AISetAdvice(estimatedRIR: 2, confidence: "low", notes: "Steady pace.",
+            weakPoints: [], nextSet: .init(loadLB: 25, reps: 10, targetRIR: 2))
+        let displayed = try advice.validatedForDisplay(for: request)
+        XCTAssertEqual(displayed.notes, "Steady pace.")
+        XCTAssertNil(displayed.nextSet)
+    }
+
     func testObservedOversizedRequestErrorReportsTokenCounts() throws {
         let body: [String: Any] = ["error": ["code": "rate_limit_exceeded", "type": "tokens",
             "message": "Request too large for gpt-5.6-luna on tokens per min (TPM): Limit 60000, Requested 137415. The input or output tokens must be reduced."]]
@@ -1008,7 +1035,7 @@ final class AIWorkoutCoachTests: XCTestCase {
     private func input() -> AISetRequest {
         let rep = SessionRep(id: "r1", start: 10, end: 12)
         let metric = GenericCycleMetrics(id: "r1", learningEpoch: 0, status: .available, meanSpeed: 0.5, peakSpeed: 0.8)
-        return AISetRequest(prescription: .init(), reps: [.init(rep: rep, generic: metric)],
+        return AISetRequest(prescription: weightedPrescription(), reps: [.init(rep: rep, generic: metric)],
             speedDegradationPercent: 20, speedMeasurement: "whole-rep 3D device speed", signalUsable: true, interrupted: false)
     }
 
@@ -1046,7 +1073,7 @@ final class AIWorkoutCoachTests: XCTestCase {
     }
 
     func testOldSummaryStillDecodesWithoutAIAdvice() throws {
-        let result = WorkoutSetResult(id: UUID(), prescription: .init(), reps: 10,
+        let result = WorkoutSetResult(id: UUID(), prescription: weightedPrescription(), reps: 10,
             averageRepDuration: 2, movementDuration: 20, interrupted: false, finishedAt: Date())
         let data = try JSONEncoder().encode(result)
         XCTAssertNil(try JSONDecoder().decode(WorkoutSetResult.self, from: data).aiAdvice)
@@ -1069,5 +1096,85 @@ final class RepTargetProgressTests: XCTestCase {
         XCTAssertEqual(RepTargetProgress(reps: 0, target: 0).segmentCount, 1)
         XCTAssertEqual(RepTargetProgress(reps: 13, target: 15).overflow, 0)
         XCTAssertEqual(RepTargetProgress(reps: 13, target: 10).overflow, 3)
+    }
+}
+
+private func weightedPrescription() -> WorkoutPrescription {
+    var value = WorkoutPrescription()
+    value.loadLB = 25
+    return value
+}
+
+@MainActor
+final class OptionalWorkoutWeightTests: XCTestCase {
+    func testWeightIsOptionalAndSurvivesArchiveRoundTrip() throws {
+        let value = WorkoutPrescription()
+        XCTAssertNil(value.loadLB)
+        XCTAssertTrue(value.isValid)
+        let decoded = try JSONDecoder().decode(WorkoutPrescription.self, from: JSONEncoder().encode(value))
+        XCTAssertNil(decoded.loadLB)
+        XCTAssertTrue(decoded.isValid)
+        var zero = value
+        zero.loadLB = 0
+        XCTAssertEqual(try JSONDecoder().decode(WorkoutPrescription.self,
+            from: JSONEncoder().encode(zero)).loadLB, 0)
+    }
+
+    func testWeightCarriesWithinExerciseAndRestoresOnReturn() {
+        let model = WorkoutModel()
+        model.prescription.loadLB = 30
+        model.updateNextSet()
+        XCTAssertEqual(model.prescription.loadLB, 30)
+        model.prescription.exercise = .lateralRaise
+        XCTAssertNil(model.prescription.loadLB)
+        model.prescription.loadLB = 15
+        model.prescription.exercise = .bicepsCurl
+        XCTAssertEqual(model.prescription.loadLB, 30)
+        model.prescription.exercise = .lateralRaise
+        XCTAssertEqual(model.prescription.loadLB, 15)
+        model.prescription.loadLB = nil
+        model.prescription.exercise = .bicepsCurl
+        model.prescription.exercise = .lateralRaise
+        XCTAssertNil(model.prescription.loadLB)
+    }
+
+    func testEditingCompletedWeightDoesNotChangeUpcomingWeight() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let model = WorkoutModel(sessionDirectory: directory, historyFileURL: url)
+        model.prescription.loadLB = 35
+        let set = SessionSet(id: "completed", prescription: weightedPrescription(),
+            reps: [.init(id: "rep", start: 0, end: 1)])
+        let draft = SetReviewDraft(sessionID: UUID(), set: set)
+        XCTAssertTrue(model.confirmSet(draft, loadLB: 25, reps: 1, repsInReserve: 2))
+        let logged = try XCTUnwrap(model.history.sets.first)
+        model.updateCompletedWeight(logged, loadLB: 30)
+        XCTAssertEqual(model.prescription.loadLB, 35)
+        XCTAssertEqual(model.history.sets.count, 1)
+        XCTAssertEqual(model.history.sets.first?.loadLB, 30)
+        XCTAssertEqual(WorkoutHistoryStore(fileURL: url).sets.first?.loadLB, 30)
+        model.updateCompletedWeight(logged, loadLB: nil)
+        XCTAssertNil(model.history.sets.first?.loadLB)
+        XCTAssertEqual(model.prescription.loadLB, 35)
+    }
+
+    func testUnknownWeightCanBeSavedWithoutInventingVolumeOrLoadAdvice() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let store = WorkoutHistoryStore(fileURL: url)
+        let set = SessionSet(id: "unknown", prescription: .init(),
+            reps: (0..<10).map { .init(id: "rep-\($0)", start: Double($0 * 2), end: Double($0 * 2 + 1)) })
+        let draft = SetReviewDraft(sessionID: UUID(), set: set)
+        XCTAssertTrue(store.confirm(draft, loadLB: nil, reps: 10, repsInReserve: 2))
+        XCTAssertNil(store.sets.first?.loadLB)
+        XCTAssertNil(store.sets.first?.volumeLB)
+        XCTAssertNil(WorkoutHistoryStore(fileURL: url).sets.first?.loadLB)
+        XCTAssertNil(store.nextSetRecommendation(for: .bicepsCurl, repRange: 8...12, targetRIR: 2))
+        XCTAssertNotNil(store.restRecommendation(after: try XCTUnwrap(store.sets.first)))
+        let result = WorkoutSetResult(id: UUID(), prescription: .init(), reps: 10,
+            averageRepDuration: nil, movementDuration: nil, interrupted: false, finishedAt: Date())
+        XCTAssertEqual(WorkoutCoach.nextSetPlan(for: result).action, .noRecommendation)
     }
 }

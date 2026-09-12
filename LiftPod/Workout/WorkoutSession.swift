@@ -136,7 +136,7 @@ struct SetReviewDraft: Identifiable, Equatable {
     let detectedReps: Int
     let averageRepDuration: Double?
     let endedAt: Date
-    var loadLB: Double
+    var loadLB: Double?
     let velocityProfile: SetVelocityProfile?
     let automaticRIR: AutomaticRIREstimate?
     let precedingSetID: String?
@@ -333,7 +333,7 @@ struct LoggedWorkoutSet: Codable, Identifiable, Equatable {
     let sessionID: UUID
     let sourceSetID: String
     let exercise: V2Exercise
-    let loadLB: Double
+    var loadLB: Double?
     let reps: Int
     let repsInReserve: Int?
     let averageRepDuration: Double?
@@ -343,14 +343,14 @@ struct LoggedWorkoutSet: Codable, Identifiable, Equatable {
     let precedingSetID: String?
     let precedingRestSeconds: Double?
 
-    var volumeLB: Double { loadLB * Double(reps) }
+    var volumeLB: Double? { loadLB.map { $0 * Double(reps) } }
 }
 
 struct WorkoutDay: Identifiable, Equatable {
     let date: Date
     let sets: [LoggedWorkoutSet]
     var id: Date { date }
-    var totalVolumeLB: Double { sets.map(\.volumeLB).reduce(0, +) }
+    var totalVolumeLB: Double { sets.compactMap(\.volumeLB).reduce(0, +) }
 }
 
 struct LoadPrediction: Equatable {
@@ -404,7 +404,7 @@ struct RestRecommendation: Equatable {
         var recommendedSeconds = rirSeconds
         var selectedBasis: Basis = repsInReserve == nil ? .repHeuristic : .rir
         var selectedExplanation = repsInReserve.map { "Based on \(reps) reps at \($0) RIR." }
-            ?? "Low confidence · Rep-based rest: 2 minutes, plus 30 seconds for 12+ reps; effort is unknown."
+            ?? "Suggested rest: 2 minutes, plus 30 seconds for 12+ reps."
 
         // Velocity loss is used as another view of the same set fatigue, so it
         // establishes a floor rather than adding time to the RIR estimate.
@@ -477,8 +477,18 @@ final class WorkoutHistoryStore: ObservableObject {
     }
 
     @discardableResult
-    func confirm(_ draft: SetReviewDraft, loadLB: Double, reps: Int, repsInReserve: Int?) -> Bool {
-        guard loadLB.isFinite, (0...1000).contains(loadLB), (1...100).contains(reps),
+    func updateWeight(for id: UUID, loadLB: Double?) -> Bool {
+        guard loadLB.map({ $0.isFinite && (0...1000).contains($0) }) ?? true,
+              let index = sets.firstIndex(where: { $0.id == id }) else { return false }
+        let previous = sets[index]
+        sets[index].loadLB = loadLB
+        guard save() else { sets[index] = previous; return false }
+        return true
+    }
+
+    @discardableResult
+    func confirm(_ draft: SetReviewDraft, loadLB: Double?, reps: Int, repsInReserve: Int?) -> Bool {
+        guard loadLB.map({ $0.isFinite && (0...1000).contains($0) }) ?? true, (1...100).contains(reps),
               repsInReserve.map({ (0...10).contains($0) }) ?? true else {
             error = "Enter a weight from 0 to 1,000 lb, 1–100 reps, and 0–10 RIR."
             return false
@@ -510,7 +520,8 @@ final class WorkoutHistoryStore: ObservableObject {
         }
         let comparable = previous.flatMap { candidate -> LoggedWorkoutSet? in
             guard candidate.exercise == set.exercise,
-                  abs(candidate.loadLB - set.loadLB) < 0.001,
+                  let previousLoad = candidate.loadLB, let currentLoad = set.loadLB,
+                  abs(previousLoad - currentLoad) < 0.001,
                   candidate.repsInReserve.map({ (0...10).contains($0) }) == true else { return nil }
             return candidate
         }
@@ -535,7 +546,7 @@ final class WorkoutHistoryStore: ObservableObject {
             set.repsInReserve.map { (0...4).contains($0) } == true &&
             set.velocityProfile?.estimatorVersion == velocityProfile.estimatorVersion &&
             set.velocityProfile?.measurementKind == velocityProfile.measurementKind &&
-            (loadLB.map { load in abs(set.loadLB - load) <= max(2.5, load * 0.25) } ?? true)
+            (loadLB.map { load in set.loadLB.map { abs($0 - load) <= max(2.5, load * 0.25) } ?? false } ?? false)
         }.prefix(24)
         let samples = compatible.flatMap { set -> [RIRObservation] in
             guard let profile = set.velocityProfile, profile.meanLiftingSpeeds.count == set.reps,
@@ -608,9 +619,9 @@ final class WorkoutHistoryStore: ObservableObject {
             confidence: confidence, calibrationSetCount: sourceCount, cappedAtFourPlus: rounded >= 4,
             lowerRIR: min(4, max(0, Int(floor(bounded - uncertainty)))),
             upperRIR: min(4, Int(ceil(bounded + uncertainty))), validationMAE: validationMAE,
-            explanation: detail + (velocityProfile.isNoisy ? " Uneven speeds widen the estimate." : "") +
-                (velocityProfile.hasInterruptedCadence ? " Longer pauses between reps reduce confidence." : "") +
-                (confidence == .medium ? " Checked against held-out sessions." : " Provisional estimate; confirm how the set felt."))
+            explanation: detail + (velocityProfile.isNoisy ? " Rep speeds varied across the set." : "") +
+                (velocityProfile.hasInterruptedCadence ? " The set included longer pauses between reps." : "") +
+                (confidence == .medium ? " Checked against held-out sessions." : ""))
     }
 
     private struct RIRObservation {
@@ -689,28 +700,28 @@ final class WorkoutHistoryStore: ObservableObject {
               (repRange.lowerBound...100).contains(repRange.upperBound),
               (0...4).contains(targetRIR), incrementLB.isFinite, incrementLB > 0,
               let source = latestSource ?? sets.first(where: { $0.exercise == exercise }),
-              source.exercise == exercise else { return nil }
+              source.exercise == exercise, let sourceLoad = source.loadLB else { return nil }
         guard let sourceRIR = source.repsInReserve, (0...4).contains(sourceRIR),
-              Self.estimatedCapacity(loadLB: source.loadLB,
+              Self.estimatedCapacity(loadLB: sourceLoad,
                                      repsToFailure: source.reps + sourceRIR) != nil else {
-            let fallback = WorkoutCoach.repBasedAdjustment(loadLB: source.loadLB, reps: source.reps,
+            let fallback = WorkoutCoach.repBasedAdjustment(loadLB: sourceLoad, reps: source.reps,
                 repRange: repRange, incrementLB: incrementLB)
             return LoadPrediction(loadLB: fallback.load, targetReps: fallback.reps,
-                targetRIR: targetRIR, estimatedCapacityLB: source.loadLB,
+                targetRIR: targetRIR, estimatedCapacityLB: sourceLoad,
                 source: source, sourceCount: 1, confidence: .low,
-                action: fallback.load > source.loadLB ? .increase :
-                    (fallback.load < source.loadLB ? .decrease : .keep),
+                action: fallback.load > sourceLoad ? .increase :
+                    (fallback.load < sourceLoad ? .decrease : .keep),
                 explanation: fallback.explanation)
         }
 
         let evidence = [source] + sets.filter { $0.id != source.id }
         let observations = evidence.filter { set in
-            guard set.exercise == exercise, let rir = set.repsInReserve else { return false }
-            return set.loadLB >= Self.minimumModelLoadLB && (0...4).contains(rir) &&
+            guard set.exercise == exercise, let rir = set.repsInReserve, let load = set.loadLB else { return false }
+            return load >= Self.minimumModelLoadLB && (0...4).contains(rir) &&
                 (2...15).contains(set.reps + rir)
         }.prefix(8).enumerated().compactMap { index, set -> (capacity: Double, weight: Double, set: LoggedWorkoutSet)? in
-            guard let rir = set.repsInReserve,
-                  let capacity = Self.estimatedCapacity(loadLB: set.loadLB,
+            guard let rir = set.repsInReserve, let load = set.loadLB,
+                  let capacity = Self.estimatedCapacity(loadLB: load,
                                                         repsToFailure: set.reps + rir) else { return nil }
             // Recent performances matter more; higher RIR receives less weight
             // because subjective RIR is less accurate farther from failure.
@@ -721,7 +732,7 @@ final class WorkoutHistoryStore: ObservableObject {
         let totalWeight = observations.reduce(0) { $0 + $1.weight }
         let capacity: Double? = totalWeight > 0
             ? observations.reduce(0) { $0 + $1.capacity * $1.weight } / totalWeight
-            : Self.estimatedCapacity(loadLB: source.loadLB, repsToFailure: source.reps + sourceRIR)
+            : Self.estimatedCapacity(loadLB: sourceLoad, repsToFailure: source.reps + sourceRIR)
         let dispersion = capacity.flatMap { value -> Double? in
             guard totalWeight > 0, value > 0 else { return nil }
             return observations.reduce(0) {
@@ -744,7 +755,7 @@ final class WorkoutHistoryStore: ObservableObject {
         }
 
         let adjacentLoad = max(Self.minimumModelLoadLB,
-                               source.loadLB + Double(direction) * incrementLB)
+                               sourceLoad + Double(direction) * incrementLB)
         let predictedAtAdjacent = capacity.flatMap {
             Self.predictedWorkingReps(capacityLB: $0, loadLB: adjacentLoad,
                                       targetRIR: targetRIR)
@@ -755,7 +766,7 @@ final class WorkoutHistoryStore: ObservableObject {
 
         let recommendedLoad: Double
         if direction == 0 {
-            recommendedLoad = source.loadLB
+            recommendedLoad = sourceLoad
         } else if adjacentFitsRange {
             recommendedLoad = adjacentLoad
         } else if capacity == nil && abs(rirError) >= 2 && repDirection == 0 {
@@ -763,7 +774,7 @@ final class WorkoutHistoryStore: ObservableObject {
             // equipment step when the population curve is outside its rep range.
             recommendedLoad = adjacentLoad
         } else {
-            recommendedLoad = source.loadLB
+            recommendedLoad = sourceLoad
         }
 
         let predictedReps = capacity.flatMap {
@@ -773,8 +784,8 @@ final class WorkoutHistoryStore: ObservableObject {
         let midpoint = (repRange.lowerBound + repRange.upperBound) / 2
         let targetReps = min(repRange.upperBound, max(repRange.lowerBound,
             predictedReps.map { Int($0.rounded()) } ?? midpoint))
-        let action: LoadPrediction.Action = recommendedLoad > source.loadLB ? .increase :
-            (recommendedLoad < source.loadLB ? .decrease : .keep)
+        let action: LoadPrediction.Action = recommendedLoad > sourceLoad ? .increase :
+            (recommendedLoad < sourceLoad ? .decrease : .keep)
 
         let confidence: LoadPrediction.Confidence
         if source.rirValueSource == .automaticVelocity || capacity == nil {
@@ -805,7 +816,7 @@ final class WorkoutHistoryStore: ObservableObject {
                 " lb adjacent step misses the target range, so keep this weight and adjust reps."
         }
         return LoadPrediction(loadLB: recommendedLoad, targetReps: targetReps,
-                              targetRIR: targetRIR, estimatedCapacityLB: capacity ?? source.loadLB,
+                              targetRIR: targetRIR, estimatedCapacityLB: capacity ?? sourceLoad,
                               source: source, sourceCount: observations.count,
                               confidence: confidence, action: action,
                               explanation: explanation)

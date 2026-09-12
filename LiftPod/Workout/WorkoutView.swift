@@ -18,9 +18,12 @@ struct WorkoutView: View {
     @State private var developerMode = false
     @State private var showingDiagnostics = false
     @State private var showingSetup = false
+    @State private var showingWeight = false
+    @State private var showingReps = false
     @State private var showingSupport = false
     @State private var showingNotebook = false
     @State private var reviewingSet: SetReviewDraft?
+    @State private var editingLoggedSet: LoggedWorkoutSet?
     @State private var diagnosticsPending = false
     @State private var now = ProcessInfo.processInfo.systemUptime
 
@@ -72,6 +75,32 @@ struct WorkoutView: View {
         }
         .foregroundStyle(LiftStyle.ink).tint(LiftStyle.blue)
         .font(.system(.subheadline, design: .monospaced))
+        .sheet(isPresented: $showingWeight) {
+            NavigationStack {
+                WeightEntryView(loadLB: workout.prescription.loadLB) { load in
+                    workout.prescription.loadLB = load
+                    workout.updateNextSet()
+                }
+            }
+        }
+        .sheet(isPresented: $showingReps) {
+            NavigationStack {
+                Form {
+                    Section("Rep target") {
+                        Stepper("Minimum reps: \(workout.prescription.minimumReps)", value: $workout.prescription.minimumReps, in: 1...workout.prescription.maximumReps)
+                        Stepper("Maximum reps: \(workout.prescription.maximumReps)", value: $workout.prescription.maximumReps, in: workout.prescription.minimumReps...100)
+                    }
+                }
+                .navigationTitle("Next set reps")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingReps = false }
+                } }
+            }
+        }
+        .onChange(of: showingReps) { wasShowing, isShowing in
+            if wasShowing && !isShowing { workout.updateNextSet() }
+        }
         .sheet(isPresented: $showingSetup, onDismiss: openPendingDiagnostics) { setupSheet }
         .sheet(isPresented: $showingSupport, onDismiss: openPendingDiagnostics) {
             LiftSupportView(status: statusText) { diagnosticsPending = true; showingSupport = false }
@@ -82,6 +111,11 @@ struct WorkoutView: View {
             }
         }
         .sheet(isPresented: $showingNotebook) { WorkoutNotebookView(store: workout.history) }
+        .sheet(item: $editingLoggedSet) { set in
+            NavigationStack {
+                WeightEntryView(loadLB: set.loadLB) { workout.updateCompletedWeight(set, loadLB: $0) }
+            }
+        }
         .sheet(item: $reviewingSet) { draft in
             SetReviewView(draft: draft) { load, reps, rir in
                 let saved = workout.confirmSet(draft, loadLB: load, reps: reps, repsInReserve: rir)
@@ -120,6 +154,7 @@ struct WorkoutView: View {
         VStack(alignment: .leading, spacing: 18) {
             MotionTraceView(samples: capture.traceSamples, streaming: liveSensor != nil)
             repReadout(reps: 0, prescription: workout.prescription, label: "READY · NEXT SET", pace: nil)
+            HStack { exerciseMenu; Spacer(); weightButton }
             RepTargetBar(reps: 0, target: workout.prescription.maximumReps)
             Divider()
             HStack {
@@ -136,7 +171,7 @@ struct WorkoutView: View {
                         Text(set.performedAt, format: .dateTime.hour().minute()).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                         Text(set.exercise.rawValue).font(.system(size: 13)).lineLimit(1)
                         Spacer(minLength: 0)
-                        Text("\(set.loadLB.formatted()) LB · \(set.reps)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                        Text("\(set.loadLB.map { "\($0.formatted()) LB" } ?? "NO WEIGHT") · \(set.reps)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
                     Divider()
                 }
@@ -148,7 +183,7 @@ struct WorkoutView: View {
         VStack(alignment: .leading, spacing: 18) {
             MotionTraceView(samples: capture.traceSamples, streaming: liveSensor != nil)
             repReadout(reps: workout.reps, prescription: workout.activePrescription,
-                       label: "COUNTING · SET \(workout.completedSetResults.count + 1)", pace: workout.currentPace)
+                       label: workout.learningMovement ? "LEARNING MOVEMENT" : "COUNTING · SET \(workout.completedSetResults.count + 1)", pace: workout.currentPace)
             RepTargetBar(reps: workout.reps, target: workout.activePrescription.maximumReps)
             HStack(spacing: 8) {
                 liveMetric("SPEED", workout.liveRepSpeedMPS.map { "\($0.formatted(.number.precision(.fractionLength(2)))) m/s" } ?? "—")
@@ -157,7 +192,7 @@ struct WorkoutView: View {
             }.accessibilityIdentifier("live-set-metrics")
             Divider()
             if workout.reps == 0 {
-                Text(workout.state == .preparing ? "Hold weight still…" : "Ready — begin lifting")
+                Text(workout.state == .preparing ? "Hold weight still…" : workout.learningMovement ? "Complete a few steady reps. Your first reps still count." : "Ready — begin lifting")
                     .foregroundStyle(.secondary).padding(.vertical, 12)
             }
             Text(workout.state == .finalizing ? "FINALIZING MEASUREMENTS…" : workout.coaching.state.title.uppercased())
@@ -183,7 +218,7 @@ struct WorkoutView: View {
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 7) {
                     Text(prescription.exercise.rawValue.uppercased()).foregroundStyle(.primary)
-                    Text("\(prescription.loadLB.formatted()) LB · \(prescription.minimumReps)–\(prescription.maximumReps) REPS")
+                    Text("\(prescription.loadLB.map { "\($0.formatted()) LB" } ?? "NO WEIGHT") · \(prescription.minimumReps)–\(prescription.maximumReps) REPS")
                     Text(pace.map { "TEMPO \($0.formatted(.number.precision(.fractionLength(2)))) s" } ?? "TARGET \(prescription.targetRIR) RIR")
                     if workout.workoutStarted { Text(clock(workout.elapsedTime)) }
                 }.font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
@@ -227,6 +262,15 @@ struct WorkoutView: View {
                 setSpeedReadout(set, rir: set.aiAdvice?.estimatedRIR.map { "\($0) · AI estimate" } ?? (workout.aiLoading ? "Analyzing…" : "Unavailable"), showsRIR: true).font(.subheadline)
                 Text(set.targetDescription).font(.subheadline).foregroundStyle(.secondary)
             }.accessibilityIdentifier("set-result")
+            if let logged = workout.latestLoggedSet {
+                completedSetEditButton(
+                    detail: logged.loadLB.map { "Recorded weight: \($0.formatted()) lb" } ?? "Recorded weight: Not entered"
+                ) {
+                    editingLoggedSet = logged
+                }
+            } else if let pending = workout.pendingSetReviews.last {
+                completedSetEditButton(detail: "Confirm weight, reps, and RIR") { reviewingSet = pending }
+            }
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("REST").font(.caption.weight(.semibold)).tracking(1.4).foregroundStyle(.secondary)
@@ -246,16 +290,7 @@ struct WorkoutView: View {
                 }
             }.padding(18).glass(radius: 22)
             aiNotes(set)
-            if set.aiAdvice?.nextSet == nil, let prediction = workout.loadPrediction() {
-                nextSetCard(prediction)
-            } else if set.aiAdvice?.nextSet == nil, let plan = set.nextSetPlan {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("NEXT SET").font(.caption.weight(.semibold)).tracking(1.6).foregroundStyle(.secondary)
-                    Text(plan.title).font(.system(size: 24, weight: .semibold))
-                    Text(nextSetCaption(plan.action)).font(.subheadline).foregroundStyle(.secondary)
-                }.padding(22).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 24)
-                    .accessibilityIdentifier("next-set-plan")
-            }
+            nextSetCard
             Spacer(minLength: 12)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -316,6 +351,9 @@ struct WorkoutView: View {
     private func setSpeedReadout(_ set: WorkoutSetResult, rir: String? = nil,
                                  showsRIR: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 5) {
+            LabeledContent("Average speed", value: set.averageSpeedMPS.map {
+                "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
+            } ?? "Not measured")
             LabeledContent("Peak speed", value: set.peakSpeedMPS.map {
                 "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
             } ?? "Not measured")
@@ -349,7 +387,7 @@ struct WorkoutView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("\(index + 1). \(set.prescription.exercise.rawValue)")
                                 .font(.system(size: 19, weight: .medium))
-                            Text("\(set.reps) reps · \(set.prescription.loadLB.formatted()) lb")
+                            Text("\(set.reps) reps · " + (set.prescription.loadLB.map { "\($0.formatted()) lb" } ?? "Weight not entered"))
                                 .font(.system(size: 15)).foregroundStyle(.secondary)
                             setSpeedReadout(set).font(.caption)
                             if let plan = set.nextSetPlan {
@@ -388,13 +426,6 @@ struct WorkoutView: View {
             }
         } else if workout.latestSetResult != nil {
             VStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    instrumentLabel("NEXT SET · SELECTED")
-                    Text(workout.prescription.exercise.rawValue)
-                    Text("\(workout.prescription.loadLB.formatted()) lb × \(workout.prescription.minimumReps == workout.prescription.maximumReps ? String(workout.prescription.maximumReps) : "\(workout.prescription.minimumReps)–\(workout.prescription.maximumReps)") · \(workout.prescription.targetRIR) RIR")
-                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(16).glass(radius: 14)
-                    .accessibilityIdentifier("selected-next-set")
                 if workout.state != .interrupted {
                     Button("Start Next Set") { Task { await workout.startSet(capture) } }
                         .buttonStyle(LiftPrimaryStyle()).accessibilityIdentifier("start-next-set")
@@ -421,6 +452,99 @@ struct WorkoutView: View {
         }
     }
 
+    private var weightButton: some View {
+        Button { showingWeight = true } label: {
+            HStack(spacing: 7) {
+                Image(systemName: workout.prescription.loadLB == nil ? "plus.circle.fill" : "dumbbell.fill")
+                Text(workout.prescription.loadLB.map { "Weight: \($0.formatted()) lb" } ?? "Add weight")
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .opacity(0.75)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(workout.prescription.loadLB == nil ? .white : LiftStyle.blue)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .background(
+                workout.prescription.loadLB == nil ? LiftStyle.blue : LiftStyle.blue.opacity(0.08),
+                in: Capsule()
+            )
+            .overlay(Capsule().stroke(LiftStyle.blue.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(workout.prescription.loadLB.map {
+            "Change weight, currently \($0.formatted()) pounds"
+        } ?? "Add weight")
+        .accessibilityHint("Opens weight entry")
+        .accessibilityIdentifier("workout-load")
+    }
+
+    private var exerciseMenu: some View {
+        Menu {
+            ForEach(V2Exercise.allCases) { exercise in
+                Button {
+                    workout.prescription.exercise = exercise
+                    workout.updateNextSet()
+                } label: {
+                    if exercise == workout.prescription.exercise {
+                        Label(exercise.rawValue, systemImage: "checkmark")
+                    } else {
+                        Text(exercise.rawValue)
+                    }
+                }
+            }
+            Divider()
+            Button { } label: {
+                Label("Auto-detect workout — Coming soon", systemImage: "sparkles")
+            }
+            .disabled(true)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "figure.strengthtraining.traditional")
+                Text(workout.prescription.exercise.rawValue)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(LiftStyle.blue)
+            .padding(.horizontal, 13)
+            .frame(minHeight: 44)
+            .background(LiftStyle.blue.opacity(0.08), in: Capsule())
+            .overlay(Capsule().stroke(LiftStyle.blue.opacity(0.3), lineWidth: 1))
+        }
+        .accessibilityLabel("Exercise, \(workout.prescription.exercise.rawValue)")
+        .accessibilityHint("Opens exercise selection")
+        .accessibilityIdentifier("exercise-selector")
+    }
+
+    private func completedSetEditButton(detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "pencil.circle.fill")
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Edit completed set")
+                        .font(.subheadline.weight(.semibold))
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+            }
+            .foregroundStyle(LiftStyle.blue)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+            .background(LiftStyle.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(LiftStyle.blue.opacity(0.3), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens completed set details")
+        .accessibilityIdentifier("edit-completed-set")
+    }
+
     private var setupSheet: some View {
         NavigationStack {
             Form {
@@ -428,10 +552,13 @@ struct WorkoutView: View {
                     Picker("Exercise", selection: $workout.prescription.exercise) {
                         ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
                     }.disabled(workout.isRunning)
-                    HStack {
-                        Text("Load (lb)")
-                        TextField("Load", value: $workout.prescription.loadLB, format: .number)
-                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing).accessibilityIdentifier("workout-load")
+                    NavigationLink {
+                        WeightEntryView(loadLB: workout.prescription.loadLB) { load in
+                            workout.prescription.loadLB = load
+                            workout.updateNextSet()
+                        }
+                    } label: {
+                        LabeledContent("Weight", value: workout.prescription.loadLB.map { "\($0.formatted()) lb" } ?? "Add")
                     }
                 }
                 Section {
@@ -476,7 +603,7 @@ struct WorkoutView: View {
                 }
                 Section {
                     Text("Start and end each set explicitly. RIR and available weight increments guide the next set.")
-                    if !workout.prescription.isValid { Text("Enter a load from 0 to 1,000 lb and a valid rep range.").foregroundStyle(.orange) }
+                    if !workout.prescription.isValid { Text("Enter a valid rep range and, optionally, a weight from 0 to 1,000 lb.").foregroundStyle(.orange) }
                 }.font(.footnote)
             }
             .navigationTitle("Workout setup").navigationBarTitleDisplayMode(.inline)
@@ -546,30 +673,49 @@ struct WorkoutView: View {
         }
     }
 
-    private func nextSetCard(_ prediction: LoadPrediction) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("NEXT SET")
+    private var nextSetCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("NEXT SET · SELECTED")
                 .font(.caption.weight(.semibold)).tracking(1.4).foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline) {
-                Text("\(prediction.loadLB.formatted()) lb × \(prediction.targetReps)")
-                    .font(.system(size: 26, weight: .semibold)).monospacedDigit()
-                Spacer()
-                Text("\(prediction.targetRIR) RIR")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(LiftStyle.blue)
-            }
-            Text(prediction.action == .increase ? "Try one step heavier" : prediction.action == .decrease ? "Try one step lighter" : "Keep this weight").font(.footnote).foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button(workout.isNextSetSelected(loadLB: prediction.loadLB, reps: prediction.targetReps, rir: prediction.targetRIR) ? "Selected" : "Use next set") {
-                    workout.use(prediction)
+            exerciseMenu
+            HStack(spacing: 8) {
+                Button { showingWeight = true } label: {
+                    Label(workout.prescription.loadLB.map { "\($0.formatted()) lb" } ?? "Add weight", systemImage: "pencil")
+                        .frame(minHeight: 44)
                 }
-                .font(.subheadline.weight(.semibold))
-                .disabled(workout.isNextSetSelected(loadLB: prediction.loadLB, reps: prediction.targetReps, rir: prediction.targetRIR))
+                .accessibilityLabel("Edit upcoming set weight")
+                .accessibilityIdentifier("workout-load")
+                Text("×").font(.title2).foregroundStyle(.secondary)
+                Button { showingReps = true } label: {
+                    Label(repTargetLabel, systemImage: "pencil")
+                        .frame(minHeight: 44)
+                }
+                .accessibilityLabel("Edit upcoming set reps, \(repTargetLabel)")
+                .accessibilityIdentifier("workout-reps")
+            }
+            .buttonStyle(.bordered).buttonBorderShape(.roundedRectangle(radius: 12))
+            .font(.subheadline.weight(.semibold)).monospacedDigit()
+            Text("Target RIR: \(workout.prescription.targetRIR)")
+                .font(.footnote).foregroundStyle(.secondary)
+            if workout.latestSetResult?.aiAdvice?.nextSet == nil, let prediction = workout.loadPrediction(), !workout.isNextSetSelected(loadLB: prediction.loadLB, reps: prediction.targetReps, rir: prediction.targetRIR) {
+                Divider()
+                Button {
+                    workout.use(prediction)
+                } label: {
+                    Label("Use suggestion: \(prediction.loadLB.formatted()) lb × \(prediction.targetReps) · \(prediction.targetRIR) RIR", systemImage: "arrow.turn.down.right")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .font(.subheadline.weight(.semibold)).buttonStyle(.bordered)
             }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 22)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("next-set-plan")
+    }
+    private var repTargetLabel: String {
+        let minimum = workout.prescription.minimumReps
+        let maximum = workout.prescription.maximumReps
+        return minimum == maximum ? "\(minimum) reps" : "\(minimum)–\(maximum) reps"
     }
     private func clock(_ seconds: Double) -> String {
         let value = seconds.isFinite ? max(0, Int(seconds)) : 0
@@ -577,15 +723,49 @@ struct WorkoutView: View {
     }
 }
 
+private struct WeightEntryView: View {
+    let save: (Double?) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+    @FocusState private var focused: Bool
+
+    init(loadLB: Double?, save: @escaping (Double?) -> Void) {
+        self.save = save
+        _text = State(initialValue: loadLB.map { $0.formatted(.number.grouping(.never)) } ?? "")
+    }
+
+    private var parsed: Double? { try? Double(text, format: .number) }
+    private var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var valid: Bool { isEmpty || parsed.map { $0.isFinite && (0...1000).contains($0) } == true }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Weight (lb)", text: $text)
+                    .keyboardType(.decimalPad).focused($focused)
+                    .accessibilityIdentifier("weight-entry")
+            } footer: {
+                Text("Optional. Leave blank to track without weight.")
+            }
+            if !valid { Text("Enter a weight from 0 to 1,000 lb.").foregroundStyle(.orange) }
+            Button("Save weight") { save(isEmpty ? nil : parsed); dismiss() }
+                .disabled(!valid).accessibilityIdentifier("save-weight")
+            Button("Clear weight") { save(nil); dismiss() }
+        }
+        .navigationTitle("Weight")
+        .onAppear { focused = true }
+    }
+}
+
 private struct SetReviewView: View {
     let draft: SetReviewDraft
-    let confirm: (Double, Int, Int?) -> Bool
+    let confirm: (Double?, Int, Int?) -> Bool
     @Environment(\.dismiss) private var dismiss
-    @State private var loadLB: Double
+    @State private var loadLB: Double?
     @State private var reps: Int
     @State private var repsInReserve: Int?
 
-    init(draft: SetReviewDraft, confirm: @escaping (Double, Int, Int?) -> Bool) {
+    init(draft: SetReviewDraft, confirm: @escaping (Double?, Int, Int?) -> Bool) {
         self.draft = draft
         self.confirm = confirm
         _loadLB = State(initialValue: draft.loadLB)
@@ -594,7 +774,7 @@ private struct SetReviewView: View {
     }
 
     private var valid: Bool {
-        loadLB.isFinite && (0...1000).contains(loadLB) && (1...100).contains(reps)
+        (loadLB.map { $0.isFinite && (0...1000).contains($0) } ?? true) && (1...100).contains(reps)
     }
 
     var body: some View {
@@ -608,10 +788,10 @@ private struct SetReviewView: View {
                     }
                 } header: { Text("Detected set") }
                 Section("Confirm or edit") {
-                    HStack {
-                        Text("Weight (lb)")
-                        TextField("Weight", value: $loadLB, format: .number)
-                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                    NavigationLink {
+                        WeightEntryView(loadLB: loadLB) { loadLB = $0 }
+                    } label: {
+                        LabeledContent("Weight", value: loadLB.map { "\($0.formatted()) lb" } ?? "Add")
                     }
                     Stepper("Reps: \(reps)", value: $reps, in: 1...100)
                     Picker("Reps in reserve", selection: $repsInReserve) {
@@ -623,7 +803,7 @@ private struct SetReviewView: View {
                             value: estimate.cappedAtFourPlus ? "4+" : "\(estimate.repsInReserve)")
                         LabeledContent("Rep speed loss",
                             value: "\(estimate.velocityLossPercent.formatted(.number.precision(.fractionLength(0))))%")
-                        LabeledContent("Estimated range", value: estimate.rangeDescription)
+                        LabeledContent("RIR range", value: estimate.rangeDescription)
                     } else {
                         Text(reps != draft.detectedReps
                             ? "Update RIR after editing reps."
@@ -686,7 +866,7 @@ private struct WorkoutNotebookView: View {
                                             Text(set.performedAt, format: .dateTime.hour().minute())
                                                 .font(.caption).foregroundStyle(.secondary)
                                         }
-                                        Text("\(set.loadLB.formatted()) lb × \(set.reps) reps" +
+                                        Text((set.loadLB.map { "\($0.formatted()) lb × " } ?? "Weight not entered · ") + "\(set.reps) reps" +
                                              (set.repsInReserve.map { " · \($0) RIR" } ?? ""))
                                             .font(.subheadline)
                                         if let duration = set.averageRepDuration {
@@ -699,7 +879,8 @@ private struct WorkoutNotebookView: View {
                                 HStack {
                                     Text(day.date.formatted(date: .abbreviated, time: .omitted))
                                     Spacer()
-                                    Text("\(day.sets.count) sets · \(day.totalVolumeLB.formatted()) lb")
+                                    Text("\(day.sets.count) sets" + (day.sets.contains { $0.loadLB == nil }
+                                        ? " · Volume incomplete" : " · \(day.totalVolumeLB.formatted()) lb"))
                                 }
                             }
                         }
