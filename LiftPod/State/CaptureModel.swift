@@ -2,7 +2,14 @@ import Combine
 import Foundation
 
 @MainActor
+protocol WorkoutMotionConsumer: AnyObject {
+    func ingest(_ sample: RawMotionSample) async
+    func motionUnavailable() async
+}
+
+@MainActor
 final class CaptureModel: ObservableObject {
+    weak var workoutConsumer: (any WorkoutMotionConsumer)?
     @Published private(set) var authorizationState: MotionPermissionState
     @Published private(set) var motionAvailable: Bool
     @Published private(set) var connectionUpdatesActive = false
@@ -54,6 +61,7 @@ final class CaptureModel: ObservableObject {
 
     func stopMotion(reason: String? = nil) async {
         guard monitoringActive || recordingActive || eventTask != nil else { return }
+        await workoutConsumer?.motionUnavailable()
         await stopRecording()
         provider.stop()
         eventTask?.cancel()
@@ -119,6 +127,7 @@ final class CaptureModel: ObservableObject {
             }
             latestSample = sample
             refreshProviderState()
+            await workoutConsumer?.ingest(sample)
         }
     }
 

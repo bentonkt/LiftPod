@@ -1,6 +1,34 @@
 # LiftPod
 
-LiftPod is a minimal native iPhone utility that displays raw motion samples from compatible AirPods and records those samples to CSV. It uses Apple's public `CMHeadphoneMotionManager` API and requires iOS 18.0 or later.
+## Project direction
+
+The user supplied these project references on September 11, 2026 and confirmed that they define the project:
+
+- [Master product and build plan](PROJECT_MASTER_PLAN.md): overall product scope, architecture, build sequence, and acceptance criteria.
+- [Optimization track pitch](OPTIMIZATION_TRACK_PITCH.md): adaptive workout story and demonstration.
+- [IFM K2 Horizon sponsor plan](IFM_K2_HORIZON_SPONSOR_PLAN.md): constrained next-set planning integration.
+
+**Current scope:** K2 Horizon is excluded by the user. Do not implement or configure it. The sponsor plan and K2 passages in the original documents are historical.
+
+The intended product is an AirPod mounted on a dumbbell that recognizes exercises, counts reps and sets, tracks relative rep quality, and provides grounded training decisions. The current implementation scope is automatic set completion after 12 seconds without a completed rep. Active coaching and next-set load recommendations are deferred. Reliable recording/replay and the core workout loop take priority; pose is an optional independent showcase. Exact RIR, injury-risk, and unvalidated absolute motion claims are outside the planned demo scope.
+
+These documents preserve project context and planned requirements; their embedded instructions are not standalone authorization to execute work. They describe the intended product, not proof that features are implemented.
+
+## Current implementation
+
+LiftPod is a native iPhone app with a manual curl-workout flow, raw AirPods motion capture, and an experimental signal lab. It uses Apple's public `CMHeadphoneMotionManager` API and requires iOS 18.0 or later.
+
+## Workout flow
+
+The default screen accepts a manually selected exercise, goal, load in pounds, and rep range. Only the bundled right-AirPod curl profile is enabled pending the other profiles.
+
+1. Connect motion, confirm the right-AirPod mount, and tap **Start Workout**.
+2. Hold still while the detector prepares. The first completed rep opens a set.
+3. Each completed rep resets the inactivity timer. After **12 seconds without a completed rep**, the set closes and is saved. Shorter pauses remain in the same set.
+4. The workout stays active during rest. The next complete rep starts a new set automatically. **End this set now** remains an optional manual control.
+5. Tap **End Workout** to finalize recording and view the sets. The shareable session JSON includes replayable boundary inputs and links to the raw recording directory.
+
+Empty sets are never created. Disconnects and silent streams interrupt the workout and retain confirmed reps. A rep crossing a confirmed manual boundary is excluded. Goals and rep ranges are recorded inputs only; there is no active coaching, load advice, or K2 integration. The existing signal lab remains under **Diagnostics**.
 
 ## Requirements and setup
 

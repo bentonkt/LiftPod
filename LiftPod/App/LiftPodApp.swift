@@ -7,7 +7,7 @@ struct LiftPodApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model)
+            WorkoutView(capture: model)
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase != .active else { return }

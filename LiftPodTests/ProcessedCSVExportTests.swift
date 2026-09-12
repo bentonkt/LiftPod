@@ -49,7 +49,6 @@ final class ProcessedCSVExportTests: XCTestCase {
     }
 }
 
-@MainActor
 final class OfflinePreprocessingIntegrationTests: XCTestCase {
     private var temporaryDirectory: URL!
 
@@ -65,6 +64,7 @@ final class OfflinePreprocessingIntegrationTests: XCTestCase {
         }
     }
 
+    @MainActor
     func testImportProcessesWithoutChangingRawFileAndProducesShareableCSV() async throws {
         let rawURL = temporaryDirectory.appendingPathComponent("raw.csv")
         let rawData = rawCSVData(samples: makeStationarySamples())
@@ -84,6 +84,7 @@ final class OfflinePreprocessingIntegrationTests: XCTestCase {
         XCTAssertEqual(model.result?.frames.count, 61)
     }
 
+    @MainActor
     func testOutputWriteFailureIsActionableAndNotShareable() async throws {
         let rawURL = temporaryDirectory.appendingPathComponent("raw.csv")
         try rawCSVData(samples: makeStationarySamples()).write(to: rawURL)
