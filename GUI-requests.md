@@ -7,11 +7,15 @@ Current scope: native iPhone workout tracking, manual exercise selection, explic
 ## Implemented adaptations
 
 - The active rep-counter screen shows the latest finalized rep speed, current speed degradation, and automatic RIR. Speed appears after the first qualified rep metric; degradation and RIR appear once the set has enough finalized speed evidence.
-- End-of-set metrics show RIR beside peak speed and speed degradation, using the confirmed value when available and the automatic estimate otherwise.
-- Next-set cards use short action captions, with confidence/model prose removed from the workout interface. Rest retains its timer and suggestion; set review retains editable RIR and its estimated range without long explanations.
+- End-of-set metrics show RIR beside average speed, peak speed, and speed degradation, using the confirmed value when available and the automatic estimate otherwise.
+- Next-set cards use short action captions, with confidence/model prose removed from the workout interface. Rest retains its timer and suggestion; set review retains editable RIR and an “RIR range” without long explanations.
+- Weight is optional and starts as unknown. The ready screen offers an “Add weight” button beside the exercise; entered weights carry forward per exercise during the app session. Between sets, the upcoming weight has quick controls using the selected equipment increment. Completed-set review and saved-weight edits update history separately from the upcoming prescription. Unknown weights remain absent in saved data and do not generate numeric load recommendations or complete-volume totals.
 
 - Developer home exports the latest workout set as a complete ZIP; the signal lab exports its completed set as a ZIP. Raw recording export saves CSV through Files and reports failures.
-- Removed confidence labels from workout rep/load recommendations and automatic RIR text, retaining measured inputs and model details.
+- Removed confidence and heuristic labels from workout recommendations and automatic RIR text, retaining measured inputs and model details internally.
+- Completed-set results show average rep speed alongside peak speed and speed degradation. The completed-set editor is a full-width bordered control with an edit icon and its recorded-weight context.
+- While generic counting learns the first repeatable movement, the rep halo shows a dash and “Learning movement” instead of zero. Supporting text explains that the first reps still count; the full backfilled count appears when learning completes.
+- The start and between-set screens expose the current exercise as a bordered selection menu with RDL, goblet squat, chest press, overhead press, lateral raise, biceps curl, external rotation, skull crusher, lunge, and bent-over rows. A disabled “Auto-detect workout — Coming soon” item reserves the future model-driven path without changing today’s manual selection behavior.
 
 - Restored the Claude reference’s white workout appearance, faint blue background glow, and translucent white cards while retaining the added controls. The top-left name still switches to the developer interface.
 - Removed the mount-confirmation checkbox and its start gate. Live right-AirPod motion is still required; mounting guidance remains informational.
@@ -23,7 +27,7 @@ Current scope: native iPhone workout tracking, manual exercise selection, explic
 - Review setup remains enabled while waiting for motion. Only starting a workout requires a live right-side stream and confirmed setup.
 - A completed set opens a compact result and next-set decision. Review remains optional, with editable weight and reps plus optional RIR; only confirmed sets enter permanent workout history.
 - The notebook icon opens confirmed workouts grouped by day, with set count and daily volume.
-- The between-set screen and setup can show an optimized next set: an available weight, rep target, target RIR, confidence, and measured reason. The bounded controller changes at most one 5 lb equipment step and the user must explicitly apply it.
+- The between-set screen and setup can show an optimized next set: an available weight, rep target, target RIR, and measured reason. The bounded controller changes at most one 5 lb equipment step and the user must explicitly apply it.
 - The rest suggestion now adapts to finalized within-set rep-speed loss and to a 20% or larger drop in estimated rep capacity across consecutive same-load sets. The UI names the signal that raised the target, while the next set remains available at any time.
 - Target RIR and the user's available 2.5, 5, or 10 lb equipment step are explicit inputs. Goal presets populate coherent rep-range and RIR targets, and recommendation reasons quote the actual previous-set result.
 - White/blue visual language, translucent controls, concentric rep halo, lowercase wordmark, and timeline summary translated into SwiftUI.
@@ -31,7 +35,7 @@ Current scope: native iPhone workout tracking, manual exercise selection, explic
 - Live status distinguishes live right-AirPod motion from waiting/disconnected states. A simulated Bluetooth connection never enables a workout.
 - Added preparation, finalizing, empty workout, interruption, and between-set states missing from the main mockup. The user explicitly starts and ends each set.
 - The between-set timer shows a simple research-based rest suggestion after the completed set's reps and RIR are confirmed. It never blocks the next set.
-- Set review pre-fills automatic RIR when at least three finalized rep-speed measurements, including the final rep, pass quality checks. It shows speed loss, model type, confidence, and suggested rest; the user can correct it.
+- Set review pre-fills automatic RIR when at least three finalized rep-speed measurements, including the final rep, pass quality checks. It shows speed loss, model type, and suggested rest; the user can correct it.
 - Rep pulse follows actual completed reps and honors Reduce Motion. No synthetic rep generation or automatic exercise switching.
 - Workout timer continues through rest while retaining sensor-source time for deterministic tests; active rep time sums accepted rep durations.
 - Live coaching shows one qualified relative slowdown state and its reason. It never exposes absolute speed or changes the committed rep count.

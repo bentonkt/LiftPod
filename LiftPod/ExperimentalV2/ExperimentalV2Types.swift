@@ -2,9 +2,16 @@ import CryptoKit
 import Foundation
 
 enum V2Exercise: String, Codable, CaseIterable, Sendable, Identifiable {
-    case bicepsCurl = "Biceps Curl"
-    case lateralRaise = "Lateral Raise"
+    case rdl = "RDL"
+    case gobletSquat = "Goblet Squat"
+    case chestPress = "Chest Press"
     case overheadPress = "Overhead Press"
+    case lateralRaise = "Lateral Raise"
+    case bicepsCurl = "Biceps Curl"
+    case externalRotation = "External Rotation"
+    case skullCrusher = "Skull Crusher"
+    case lunge = "Lunge"
+    case bentOverRows = "Bent Over Rows"
     var id: String { rawValue }
 }
 
