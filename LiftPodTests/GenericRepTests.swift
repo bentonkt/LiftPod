@@ -3,6 +3,49 @@ import simd
 @testable import LiftPod
 
 final class GenericRepTests: XCTestCase {
+    func testRDLRollingDiscoveryAndLegacyReplay() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/rdl-six-patterns")
+        XCTAssertTrue(try GenericReplayVerifier().verify(directory: root).passed)
+        var config = try JSONDecoder().decode(GenericSessionConfiguration.self,
+            from: Data(contentsOf: root.appendingPathComponent("generic-configuration.json")))
+        var revised = config.detector; revised.version = "generic-pattern-v2"
+        config = .init(setID:config.setID,sensorSide:config.sensorSide,detector:revised,metricsEnabled:false)
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("rdl-\(UUID()).jsonl")
+        defer { try? FileManager.default.removeItem(at:scratch) }
+        var p = try GenericRepProcessor(configuration:config,history:GenericFrameHistory(url:scratch))
+        var origin: Double?
+        try GenericFrameHistory.lines(root.appendingPathComponent("processor-transactions.jsonl")) { data in
+            let tx = try JSONDecoder().decode(GenericSessionTransaction.self,from:data)
+            origin = origin ?? tx.input.raw?.sample.sourceTimestamp
+            try p.apply(tx.input)
+        }
+        // Development waveform annotations, not physical turnaround labels.
+        let intervals = [2.8...4.5,6.1...7.8,9.5...11.2,12.6...14.4,17.4...19.4,21.7...23.8]
+        XCTAssertEqual(p.events.count,6)
+        let zero = try XCTUnwrap(origin)
+        for interval in intervals {
+            XCTAssertEqual(p.events.filter { interval.contains($0.completionTimestamp-zero) }.count,1)
+        }
+        let template = try XCTUnwrap(p.templates.first)
+        XCTAssertGreaterThan(template.learnedFrom[0]-zero,0.2)
+        XCTAssertGreaterThan(template.frozenAt-template.learnedFrom[2],template.duration*0.75)
+        let weights = try XCTUnwrap(template.groupWeights)
+        XCTAssertGreaterThan(weights[0],weights[1])
+        XCTAssertEqual(p.templates.count,1)
+    }
+
+    func testRollingDiscoveryRejectsTwoCyclesThenUnrelatedMotion() throws {
+        var p = try processor()
+        for i in 0...600 {
+            let t = Double(i)/50
+            let sample = i < 200 ? raw(i) : experimentalRawSample(index:UInt64(i),time:t,side:.rightHeadphone,
+                acceleration:.init(x:0,y:0.08*sin(t*t),z:0),gravity:.init(x:0,y:0,z:-1))
+            try p.apply(.init(kind:.sample,raw:RawMotionEvent(sample)))
+        }
+        XCTAssertTrue(p.events.isEmpty)
+    }
+
     private func frame(_ index: Int, period: Double = 2, amplitude: Double = 0.35, epoch: Int = 0) -> ResampledMotionSample {
         let t = Double(index)/50, phase = 2*Double.pi*t/period
         return .init(sourceTimestamp:t,sessionTime:t,sensorSide:.right,
