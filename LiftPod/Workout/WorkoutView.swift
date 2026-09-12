@@ -72,6 +72,13 @@ struct WorkoutView: View {
                 .frame(minHeight: max(0, geometry.size.height - 110), alignment: .top)
             }
             .background(LiftStyle.background.ignoresSafeArea())
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if showsFloatingNextSet {
+                    startNextSetButton
+                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .background(.ultraThinMaterial)
+                }
+            }
         }
         .foregroundStyle(LiftStyle.ink).tint(LiftStyle.blue)
         .font(.system(.subheadline, design: .monospaced))
@@ -183,7 +190,8 @@ struct WorkoutView: View {
         VStack(alignment: .leading, spacing: 18) {
             MotionTraceView(samples: capture.traceSamples, streaming: liveSensor != nil)
             repReadout(reps: workout.reps, prescription: workout.activePrescription,
-                       label: workout.learningMovement ? "LEARNING MOVEMENT" : "COUNTING · SET \(workout.completedSetResults.count + 1)", pace: workout.currentPace)
+                       label: workout.learningMovement ? "LEARNING YOUR RHYTHM" : "COUNTING · SET \(workout.completedSetResults.count + 1)", pace: workout.currentPace,
+                       learning: workout.learningMovement || workout.state == .preparing)
             RepTargetBar(reps: workout.reps, target: workout.activePrescription.maximumReps)
             HStack(spacing: 8) {
                 liveMetric("SPEED", workout.liveRepSpeedMPS.map { "\($0.formatted(.number.precision(.fractionLength(2)))) m/s" } ?? "—")
@@ -205,16 +213,18 @@ struct WorkoutView: View {
         Text(text).font(.system(size: 10, design: .monospaced)).tracking(1.2).foregroundStyle(.secondary)
     }
 
-    private func repReadout(reps: Int, prescription: WorkoutPrescription, label: String, pace: Double?) -> some View {
+    private func repReadout(reps: Int, prescription: WorkoutPrescription, label: String, pace: Double?, learning: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.system(size: 10, design: .monospaced)).tracking(1.4)
                 .foregroundStyle(workout.isRunning ? LiftStyle.blue : Color.secondary)
             HStack(alignment: .bottom, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(String(format: "%02d", reps)).font(.system(size: 94, weight: .bold, design: .monospaced))
-                        .tracking(-7).minimumScaleFactor(0.5).lineLimit(1).contentTransition(.numericText())
-                    Text("REPS").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-                }.accessibilityElement(children: .ignore).accessibilityLabel("\(reps) completed reps").accessibilityIdentifier("workout-reps")
+                    Text(learning ? "Learning your rhythm" : String(format: "%02d", reps)).font(.system(size: learning ? 28 : 94, weight: .bold, design: .monospaced))
+                        .tracking(learning ? -0.5 : -7).minimumScaleFactor(0.5).lineLimit(learning ? 3 : 1).contentTransition(.numericText())
+                    if !learning {
+                        Text("REPS").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                    }
+                }.accessibilityElement(children: .ignore).accessibilityLabel(learning ? "Learning your rhythm. Your first reps still count." : "\(reps) completed reps").accessibilityIdentifier("workout-reps")
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 7) {
                     Text(prescription.exercise.rawValue.uppercased()).foregroundStyle(.primary)
@@ -227,7 +237,7 @@ struct WorkoutView: View {
         }
     }
 
-    private func liveMetric(_ label: String, _ value: String) -> some View {
+    private func liveMetric(_ label: String, _ value: String, detail: String? = nil) -> some View {
         VStack(spacing: 5) {
             Text(label)
                 .font(.system(size: 10, weight: .semibold))
@@ -240,6 +250,7 @@ struct WorkoutView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.78)
+            if let detail { Text(detail).font(.system(size: 9)).foregroundStyle(.secondary) }
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 6)
@@ -251,10 +262,10 @@ struct WorkoutView: View {
     private func betweenSets(_ set: WorkoutSetResult) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 12) {
-                repReadout(reps: set.reps, prescription: set.prescription,
+                repReadout(reps: workout.latestLoggedSet?.reps ?? set.reps, prescription: set.prescription,
                            label: set.interrupted ? "SET INTERRUPTED" : "SET \(workout.completedSetResults.count) COMPLETE",
                            pace: set.averageRepDuration)
-                RepTargetBar(reps: set.reps, target: set.prescription.maximumReps)
+                RepTargetBar(reps: workout.latestLoggedSet?.reps ?? set.reps, target: set.prescription.maximumReps)
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                     liveMetric("AVERAGE SPEED", set.averageSpeedMPS.map {
                         "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
@@ -265,9 +276,9 @@ struct WorkoutView: View {
                     liveMetric("RIR", set.aiAdvice?.estimatedRIR.map(String.init) ?? (workout.aiLoading ? "Analyzing…" : "—"))
                     liveMetric("SPEED DEGRADATION", set.slowdownPercent.map {
                         "\($0.formatted(.number.precision(.fractionLength(0))))%"
-                    } ?? "—")
+                    } ?? "—", detail: set.slowdownPercent == nil ? "Needs 3 measured reps" : "Measured reps")
                 }.accessibilityIdentifier("set-speed-metrics")
-                Text(set.targetDescription).font(.subheadline).foregroundStyle(.secondary)
+                Text(set.targetDescription(for: workout.latestLoggedSet?.reps ?? set.reps)).font(.subheadline).foregroundStyle(.secondary)
             }.accessibilityIdentifier("set-result")
             if let logged = workout.latestLoggedSet {
                 completedSetEditButton(
@@ -321,19 +332,6 @@ struct WorkoutView: View {
                         Text(point.cue).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-                if let next = advice.nextSet {
-                    Divider()
-                    Text("NEXT SET · SUGGESTION").font(.caption.weight(.semibold))
-                    Text("\(next.loadLB.formatted()) lb × \(next.reps) · \(next.targetRIR) RIR")
-                        .font(.title3.weight(.semibold))
-                    Button(workout.isNextSetSelected(loadLB: next.loadLB, reps: next.reps, rir: next.targetRIR) ? "Selected" : "Use next set") {
-                        workout.useAIAdvice()
-                    }.buttonStyle(.bordered)
-                        .disabled(workout.prescription.exercise != set.prescription.exercise || workout.isNextSetSelected(loadLB: next.loadLB, reps: next.reps, rir: next.targetRIR))
-                    if workout.prescription.exercise != set.prescription.exercise {
-                        Text("This suggestion is for \(set.prescription.exercise.rawValue).").font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
             } else if workout.aiLoading {
                 ProgressView("Analyzing your set…")
             } else if set.interrupted || set.reps == 0 {
@@ -350,7 +348,7 @@ struct WorkoutView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(22).glass(radius: 24)
         .accessibilityIdentifier("ai-coach-notes")
-        .task(id: "\(set.id)-\(aiCoachEnabled)") {
+        .task(id: "\(set.id)-\(aiCoachEnabled)-\(workout.aiInputRevision)") {
             if aiCoachEnabled && set.aiAdvice == nil {
                 await workout.analyzeLatestSet(model: aiCoachModel, apiKey: aiCoachAPIKey)
             }
@@ -419,6 +417,16 @@ struct WorkoutView: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var showsFloatingNextSet: Bool {
+        workout.result == nil && !workout.isRunning && workout.latestSetResult != nil && workout.state != .interrupted
+    }
+
+    private var startNextSetButton: some View {
+        Button("Start Next Set") { Task { await workout.startSet(capture) } }
+            .buttonStyle(LiftPrimaryStyle()).accessibilityIdentifier("start-next-set")
+            .disabled(!signalLive || capture.recordingActive)
+    }
+
     @ViewBuilder private var bottomControls: some View {
         if workout.result != nil {
             Button("Done") { workout.reset() }.buttonStyle(LiftPrimaryStyle())
@@ -435,11 +443,6 @@ struct WorkoutView: View {
             }
         } else if workout.latestSetResult != nil {
             VStack(spacing: 10) {
-                if workout.state != .interrupted {
-                    Button("Start Next Set") { Task { await workout.startSet(capture) } }
-                        .buttonStyle(LiftPrimaryStyle()).accessibilityIdentifier("start-next-set")
-                        .disabled(!signalLive || capture.recordingActive)
-                }
                 HStack(spacing: 10) {
                     if workout.state != .interrupted {
                         Button("Adjust Next Set") { showingSetup = true }
@@ -687,6 +690,8 @@ struct WorkoutView: View {
             Text("NEXT SET · SELECTED")
                 .font(.caption.weight(.semibold)).tracking(1.4).foregroundStyle(.secondary)
             exerciseMenu
+            Text("Set next set's weight and rep goal. Recommended values pre-filled.")
+                .font(.footnote).foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 Button { showingWeight = true } label: {
                     Label(workout.prescription.loadLB.map { "\($0.formatted()) lb" } ?? "Add weight", systemImage: "pencil")
@@ -706,16 +711,6 @@ struct WorkoutView: View {
             .font(.subheadline.weight(.semibold)).monospacedDigit()
             Text("Target RIR: \(workout.prescription.targetRIR)")
                 .font(.footnote).foregroundStyle(.secondary)
-            if workout.latestSetResult?.aiAdvice?.nextSet == nil, let prediction = workout.loadPrediction(), !workout.isNextSetSelected(loadLB: prediction.loadLB, reps: prediction.targetReps, rir: prediction.targetRIR) {
-                Divider()
-                Button {
-                    workout.use(prediction)
-                } label: {
-                    Label("Use suggestion: \(prediction.loadLB.formatted()) lb × \(prediction.targetReps) · \(prediction.targetRIR) RIR", systemImage: "arrow.turn.down.right")
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                }
-                .font(.subheadline.weight(.semibold)).buttonStyle(.bordered)
-            }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 22)
         .accessibilityElement(children: .contain)

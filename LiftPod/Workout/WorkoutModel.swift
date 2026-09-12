@@ -9,6 +9,7 @@ enum TrainingGoal: String, Codable, CaseIterable, Identifiable {
 struct WorkoutPrescription: Codable, Equatable {
     var exercise: V2Exercise = .bicepsCurl
     var goal: TrainingGoal = .muscle
+    static let defaultLoadLB = 10.0
     var loadLB: Double? = nil
     var minimumReps = 8
     var maximumReps = 12
@@ -57,7 +58,10 @@ struct WorkoutSetResult: Codable, Identifiable {
     var nextSetPlan: NextSetPlan? = nil
     var aiAdvice: AISetAdvice? = nil
 
-    var targetDescription: String {
+    var targetDescription: String { targetDescription(for: reps) }
+
+    func targetDescription(for completedReps: Int) -> String {
+        let reps = completedReps
         if interrupted { return "Interrupted — target not assessed" }
         if reps == 0 { return "No complete reps recorded" }
         if reps < prescription.minimumReps { return "Below your rep target" }
@@ -232,12 +236,19 @@ struct WorkoutRepLedger {
 @MainActor
 final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var exerciseWeights: [V2Exercise: Double] = [:]
-    @Published var prescription = WorkoutPrescription() {
+    private var prescriptionRevision = 0
+    @Published var prescription: WorkoutPrescription = {
+        var value = WorkoutPrescription()
+        value.loadLB = WorkoutPrescription.defaultLoadLB
+        return value
+    }() {
         didSet {
+            prescriptionRevision += 1
             if prescription.exercise != oldValue.exercise {
                 exerciseWeights[oldValue.exercise] = oldValue.loadLB
-                prescription.loadLB = exerciseWeights[prescription.exercise]
+                prescription.loadLB = exerciseWeights[prescription.exercise] ?? WorkoutPrescription.defaultLoadLB
             } else {
+                if prescription.loadLB == nil { prescription.loadLB = WorkoutPrescription.defaultLoadLB }
                 exerciseWeights[prescription.exercise] = prescription.loadLB
             }
         }
@@ -246,6 +257,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     @Published private(set) var state: V2SetState = .idle
     @Published private(set) var reps = 0
     @Published private(set) var learningMovement = false
+    @Published private(set) var aiInputRevision = 0
     @Published private(set) var busy = false
     @Published private(set) var error: String?
     @Published private(set) var result: WorkoutSetResult?
@@ -387,6 +399,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             aiRequestID = UUID(); aiLoading = false; aiError = nil
             latestSetResult?.aiAdvice = nil
             if let index = completedSetResults.indices.last { completedSetResults[index].aiAdvice = nil }
+            aiInputRevision += 1
         }
         pendingSetReviews.removeAll { $0.sessionID == draft.sessionID && $0.id == draft.id }
         error = nil
@@ -444,6 +457,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     func startSet(_ capture: CaptureModel) async {
         guard canStart(capture) else { return }
         aiRequestID = UUID(); aiLoading = false; aiError = nil
+        learningMovement = countingMode == .generic
         busy = true
         defer { busy = false }
         resultBeforePreparation = latestSetResult
@@ -612,7 +626,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
                 SetVelocityProfile(set: $0, metrics: profileMetrics)
         }
         liveRepSpeedMPS = latestFinalizedRepSpeed()
-        liveSpeedDegradationPercent = velocity?.velocityLossPercent
+        liveSpeedDegradationPercent = observedSpeedDegradation(for: session?.current?.reps ?? [])
         let signalUsable = snapshot.quality == .usable && snapshot.isRecovering != true
         if velocity != cachedRIRProfile || cachedRIRHistoryCount != history.sets.count ||
             cachedRIRPrescription != currentPrescription {
@@ -653,7 +667,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             id: detectorSetID ?? UUID(), prescription: frozenPrescription, reps: reps,
             averageRepDuration: averageDuration, movementDuration: movementDuration,
             interrupted: state == .interrupted, finishedAt: Date(),
-            slowdownPercent: coaching.slowdownPercent, coaching: coaching)
+            slowdownPercent: observedSpeedDegradation(for: accepted), coaching: coaching)
         let acceptedIDs = Set(accepted.map(\.id))
         let availableGenericMetrics = genericMetrics.values.filter {
             acceptedIDs.contains($0.id) && $0.status == .available
@@ -706,10 +720,36 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             error = "The recording could not be saved."
         }
     }
+    private func observedSpeedDegradation(for reps: [SessionRep]) -> Double? {
+        let speeds: [Double?]
+        if runningGeneric {
+            let matched = reps.map { genericMetrics[$0.id] }
+            guard let last = matched.compactMap({ $0 }).last(where: { $0.status == .available }) else { return nil }
+            speeds = matched.map { metric in
+                guard let metric, metric.status == .available,
+                      metric.learningEpoch == last.learningEpoch,
+                      metric.estimatorVersion == last.estimatorVersion else { return nil }
+                return metric.meanSpeed
+            }
+        } else {
+            let byID = Dictionary((profileMetrics?.reps ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+            let matched = reps.map { byID[$0.id] }
+            guard let last = matched.compactMap({ $0 }).last(where: { $0.status == .available }) else { return nil }
+            speeds = matched.map { metric in
+                guard let metric, metric.status == .available,
+                      metric.estimatorVersion == last.estimatorVersion,
+                      metric.measurementKind == last.measurementKind else { return nil }
+                return metric.meanLiftingSpeed
+            }
+        }
+        return ObservedSpeedTrend.degradationPercent(speeds)
+    }
+
     func analyzeLatestSet(model: String, apiKey: String) async {
         guard !isRunning, !aiLoading, let set = latestSetResult, var input = aiInput,
               !set.interrupted, set.reps > 0 else { return }
         let requestID = UUID()
+        let selectionRevision = prescriptionRevision
         aiRequestID = requestID; aiLoading = true; aiError = nil
         if let sourceID = completedSets.last?.id,
            let confirmed = history.sets.first(where: { $0.sessionID == sessionID && $0.sourceSetID == sourceID }) {
@@ -723,6 +763,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             try Task.checkCancellation()
             guard aiRequestID == requestID, latestSetResult?.id == set.id, !isRunning else { return }
             latestSetResult?.aiAdvice = advice
+            if prescriptionRevision == selectionRevision { useAIAdvice() }
             if let index = completedSetResults.firstIndex(where: { $0.id == set.id }) {
                 completedSetResults[index].aiAdvice = advice
             }

@@ -887,3 +887,18 @@ final class WorkoutHistoryStore: ObservableObject {
         }
     }
 }
+
+/// Descriptive speed change across measured reps, independent of RIR calibration.
+enum ObservedSpeedTrend {
+    static func degradationPercent(_ orderedSpeeds: [Double?]) -> Double? {
+        let speeds = orderedSpeeds.compactMap { value -> Double? in
+            guard let value, value.isFinite, value > 0 else { return nil }
+            return value
+        }
+        guard speeds.count >= 3 else { return nil }
+        let window = min(2, speeds.count / 2)
+        let opening = speeds.prefix(window).reduce(0, +) / Double(window)
+        let closing = speeds.suffix(window).reduce(0, +) / Double(window)
+        return max(0, min(100, 100 * (1 - closing / opening)))
+    }
+}
