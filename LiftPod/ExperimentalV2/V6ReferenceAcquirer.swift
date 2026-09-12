@@ -12,8 +12,9 @@ struct V6ReferenceAcquirer: Sendable {
     mutating func observe(_ sample: ResampledMotionSample, profile: V2DSPProfile) -> V2ReferenceMeasurements? {
         guard measurements == nil else { return measurements }
         let adaptive = profile.identity.algorithm == .adaptiveAxis || profile.identity.algorithm == .adaptiveAxisV7
+        let relativeGravity = adaptive || profile.identity.algorithm == .gravityTilt
         let axis = V6ProfileConstants.fixedAngularAxis
-        let raw = adaptive ? sample.gravity.magnitude :
+        let raw = relativeGravity ? sample.gravity.magnitude :
             (profile.identity.algorithm == .fixedAxisAngular ? V6VectorMath.dot(sample.gravity, axis) :
                 profile.identity.polarity * sample.gravity.value(on: profile.identity.projectionAxis))
         samples.append(.init(signal: raw, attitude: sample.attitude, gravity: sample.gravity,
@@ -48,10 +49,10 @@ struct V6ReferenceAcquirer: Sendable {
 
         let gravityValues = samples.map(\.gravity)
         let gravity: ExperimentalVector3
-        if let adaptiveConfiguration = profile.identity.adaptiveAxis {
+        if let maximumVariation = profile.identity.adaptiveAxis?.maximumPreparationVariation ?? profile.identity.gravityTilt?.maximumPreparationVariation {
             let center = V6VectorMath.mean(gravityValues)
             let deviations = gravityValues.map { V6VectorMath.angularDistance($0, center) }.sorted()
-            guard Self.quantile(deviations, 0.95) <= adaptiveConfiguration.maximumPreparationVariation,
+            guard Self.quantile(deviations, 0.95) <= maximumVariation,
                   let normalized = V6VectorMath.unit(center) else { return nil }
             gravity = normalized
         } else {

@@ -243,10 +243,16 @@ struct ExperimentalV2SignalLabView: View {
         Section {
             DisclosureGroup("Developer Controls", isExpanded: $developerControlsExpanded) {
                 if model.countingMode == .exercise {
-                Picker("Detector", selection: $model.selectedAlgorithm) {
-                    ForEach(V6Algorithm.allCases, id: \.self) { Text(algorithmName($0)).tag($0) }
+                if model.selectedExercise == .bicepsCurl {
+                    Picker("Detector", selection: $model.selectedAlgorithm) {
+                        ForEach(V6Algorithm.allCases.filter { $0 != .gravityTilt }, id: \.self) {
+                            Text(algorithmName($0)).tag($0)
+                        }
+                    }
+                    .disabled([.preparing, .active, .finalizing].contains(model.snapshot.setState))
+                } else if let algorithm = model.profile?.identity.algorithm {
+                    row("Detector", algorithmName(algorithm))
                 }
-                .disabled([.preparing, .active, .finalizing].contains(model.snapshot.setState))
                 Toggle("Continuous speed V2 (experimental)", isOn: $model.continuousMetricsEnabled)
                     .disabled(model.devicePathMetricsEnabled || [.preparing, .active, .finalizing].contains(model.snapshot.setState))
                 }
@@ -283,6 +289,7 @@ struct ExperimentalV2SignalLabView: View {
         case .fixedAxisAngular: "Fixed-axis angular (V5)"
         case .adaptiveAxis: "Adaptive-axis (V6)"
         case .adaptiveAxisV7: "Adaptive-axis continuous (V7)"
+        case .gravityTilt: "Reference-relative gravity tilt"
         }
     }
 }

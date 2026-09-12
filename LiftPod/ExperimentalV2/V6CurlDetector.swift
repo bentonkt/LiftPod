@@ -31,6 +31,9 @@ struct V6CurlDetector: Sendable {
     private var emittedBoundaryEvidence: [V2BoundaryEvidence] = []
     private(set) var events: [V2CycleEvidence] = []
     private(set) var boundaries: [V2BoundaryEvidence] = []
+    private var referenceGravity: ExperimentalVector3?
+    private var acceptedDirectionSum = ExperimentalVector3(x: 0, y: 0, z: 0)
+    private var candidateDirections: [String: ExperimentalVector3] = [:]
 
     init(profile: V2DSPProfile, descriptor: V2SetDescriptor) {
         self.profile = profile
@@ -65,11 +68,16 @@ struct V6CurlDetector: Sendable {
         frozenAxis = nil; previousEstimate = nil; stableEstimateCount = 0; recoveryStart = nil
         unresolvedQuietStart = nil; unresolvedMotionSeen = false; fixedAxisInvalid = false
         pendingSuccessorBoundaryID = nil; emittedBoundaryEvidence.removeAll(keepingCapacity: true)
+        candidateDirections.removeAll(keepingCapacity: true)
     }
 
     mutating func setCommitted(_ committed: Bool, forCandidateID id: String) {
         guard let index = events.lastIndex(where: { $0.id == id }) else { return }
+        if committed, !events[index].committed, let direction = candidateDirections.removeValue(forKey: id) {
+            acceptedDirectionSum = V6VectorMath.add(acceptedDirectionSum, direction)
+        }
         events[index].committed = committed
+        if !committed { candidateDirections.removeValue(forKey: id) }
         if !committed, events[index].rejectionReason == nil { events[index].rejectionReason = .outsideActiveSet }
     }
 
@@ -77,6 +85,14 @@ struct V6CurlDetector: Sendable {
                           departureAllowed: Bool) -> V6DetectorUpdate {
         emittedBoundaryEvidence.removeAll(keepingCapacity: true)
         switch profile.identity.algorithm {
+        case .gravityTilt:
+            referenceGravity = reference.referenceGravity
+            let scalar = V6VectorMath.angularDistance(sample.gravity, reference.referenceGravity)
+            candidateSamples.append(sample)
+            let oldest = sample.sourceTimestamp - profile.identity.timing.maximumCycleDuration
+            candidateSamples.removeAll { $0.sourceTimestamp < oldest }
+            return consume(sample, signal: signalFilter.process(scalar), signedRate: nil,
+                           axis: nil, energyFraction: nil, departureAllowed: departureAllowed)
         case .qualifiedLocalCycle:
             let source = profile.identity.signalSource == .gravity ? sample.gravity : sample.userAcceleration
             let scalar = profile.identity.polarity * source.value(on: profile.identity.projectionAxis) - reference.neutralSignal
@@ -222,6 +238,31 @@ struct V6CurlDetector: Sendable {
         }
         if let cycle = result.cycle {
             var fraction = energyFraction
+            var metricAxis = axis
+            var directionRejection: V2RejectionReason?
+            if let config = profile.identity.gravityTilt, let referenceGravity,
+               let reference = V6VectorMath.unit(referenceGravity) {
+                // Near the apex the tangent direction is observable; near neutral
+                // its normalization would amplify tiny wrist/noise differences.
+                let minimumAngle = max(config.minimumDirectionDisplacement, cycle.top * config.directionApexFraction)
+                let values = candidateSamples.filter {
+                    $0.sourceTimestamp >= cycle.startTime && $0.sourceTimestamp <= cycle.topTime &&
+                        V6VectorMath.angularDistance($0.gravity, reference) >= minimumAngle
+                }
+                let directions = values.map { frame -> ExperimentalVector3 in
+                    V6VectorMath.add(frame.gravity, V6VectorMath.scale(reference, -V6VectorMath.dot(frame.gravity, reference)))
+                }
+                if let direction = V6VectorMath.unit(V6VectorMath.mean(directions)) {
+                    if let accepted = V6VectorMath.unit(acceptedDirectionSum),
+                       V6VectorMath.angularDistance(direction, accepted) > config.maximumDirectionDifference {
+                        directionRejection = .inconsistentDirection
+                    } else { candidateDirections[cycle.candidateID] = direction }
+                    metricAxis = V6VectorMath.unit(.init(
+                        x: direction.y * reference.z - direction.z * reference.y,
+                        y: direction.z * reference.x - direction.x * reference.z,
+                        z: direction.x * reference.y - direction.y * reference.x))
+                } else { directionRejection = .phaseEvidence }
+            }
             if let axis, usesAdaptiveAxis {
                 let owned = candidateSamples.filter { $0.sourceTimestamp >= cycle.startTime && $0.sourceTimestamp <= cycle.completionTime }
                 let energy = owned.reduce(into: (along: 0.0, total: 0.0)) { partial, frame in
@@ -242,9 +283,16 @@ struct V6CurlDetector: Sendable {
                                 topTimestamp: cycle.topTime, completionTimestamp: cycle.completionTime,
                                 detectionTimestamp: cycle.detectionTime, bottom: cycle.bottom, top: cycle.top,
                                 returned: cycle.returned, outboundArea: cycle.outboundArea,
-                                returnArea: cycle.returnArea, committed: false, rejectionReason: nil,
-                                movementAxis: axis, axisEnergyFraction: fraction))
-            lastRejection = nil
+                                returnArea: cycle.returnArea, committed: false, rejectionReason: directionRejection,
+                                movementAxis: metricAxis, axisEnergyFraction: fraction))
+            lastRejection = directionRejection
+            if profile.identity.gravityTilt != nil, directionRejection == nil {
+                recordBoundary(for: cycle, sourceEpoch: sample.epoch)
+                if cycle.completionKind == .continuousReversal, departureAllowed {
+                    pendingSuccessorBoundaryID = boundaries.last?.boundaryID
+                    linkPendingBoundaryToCurrentCandidate()
+                }
+            }
             if preservesSuccessorTail {
                 recordBoundary(for: cycle, sourceEpoch: sample.epoch)
                 if cycle.completionKind == .continuousReversal, departureAllowed {

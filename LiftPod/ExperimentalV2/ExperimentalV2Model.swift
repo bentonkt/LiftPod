@@ -58,7 +58,7 @@ final class ExperimentalV2Model: ObservableObject {
 
     var unavailableMessage: String? {
         if countingMode == .generic { return nil }
-        return selectedExercise == .bicepsCurl && selectedSide == .right ? nil :
+        return profile != nil ? nil :
             "This exercise and setup require calibration or an imported eligible Experimental V6 profile."
     }
 
@@ -206,13 +206,18 @@ final class ExperimentalV2Model: ObservableObject {
 
     private func refreshProfile() {
         guard ![.preparing, .active, .finalizing].contains(snapshot.setState) else { return }
-        guard selectedExercise == .bicepsCurl, selectedSide == .right else { profile = nil; return }
-        switch selectedAlgorithm {
-        case .qualifiedLocalCycle: profile = .bundledCurl
-        case .fixedAxisAngular: profile = .fixedAxisAngularCurl
-        case .adaptiveAxis: profile = .adaptiveCurlV6
-        case .adaptiveAxisV7: profile = .adaptiveCurlV7
-        }
+        guard selectedSide == .right else { profile = nil; return }
+        if selectedExercise == .lateralRaise {
+            profile = .lateralRaiseV6
+        } else if selectedExercise == .bicepsCurl {
+            switch selectedAlgorithm {
+            case .qualifiedLocalCycle: profile = .bundledCurl
+            case .fixedAxisAngular: profile = .fixedAxisAngularCurl
+            case .adaptiveAxis: profile = .adaptiveCurlV6
+            case .adaptiveAxisV7: profile = .adaptiveCurlV7
+            case .gravityTilt: profile = .adaptiveCurlV6
+            }
+        } else { profile = nil; return }
         snapshot = .init(ingestSequence: -1, setState: .idle, quality: .warmingUp,
                          detectorPhase: .waitingForBottom, committedCount: 0, reference: nil,
                          filteredSignal: nil, landmarks: .init(), recentEvents: [])
