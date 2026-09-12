@@ -1,157 +1,259 @@
 # LiftPod
 
-## Project direction
+LiftPod is a native iPhone workout tracker that uses motion data from a right
+AirPod mounted on a weight. It learns a repeated movement, counts complete reps,
+groups reps into sets, estimates movement speed, and produces post-set metrics
+for workout review and coaching.
 
-The user supplied these project references on September 11, 2026 and confirmed that they define the project:
+The main workout experience supports manually bounded sets and continuous
+automatic set detection. A separate engineering interface exposes raw capture,
+CSV preprocessing, replay, calibration, and experimental detector tools.
 
-- [Master product and build plan](PROJECT_MASTER_PLAN.md): overall product scope, architecture, build sequence, and acceptance criteria.
-- [Optimization track pitch](OPTIMIZATION_TRACK_PITCH.md): adaptive workout story and demonstration.
-- [IFM K2 Horizon sponsor plan](IFM_K2_HORIZON_SPONSOR_PLAN.md): constrained next-set planning integration.
+## What the app does
 
-**Current scope:** K2 Horizon is excluded by the user. Do not implement or configure it. The sponsor plan and K2 passages in the original documents are historical.
+- Streams acceleration, rotation, gravity, and attitude from compatible AirPods.
+- Learns an exercise-independent movement pattern during each workout.
+- Counts repetitions only after a complete cycle is authorized.
+- Supports manual **Start Set / End Set** control or automatic set grouping.
+- Estimates whole-rep mean and peak device speed with explicit quality gates.
+- Estimates average upward and downward speeds after a set.
+- Optionally suggests an exercise label; uncertain labels require user review.
+- Saves confirmed workout history separately from replayable sensor recordings.
+- Optionally sends a compact set summary to OpenAI for RIR, rest, and next-set
+  coaching.
 
-The intended product is an AirPod mounted on a dumbbell that counts reps and sets, shows qualified slowdown coaching, and records confirmed workout history. The current user flow uses explicit start and end controls for every set. A bounded optimizer can suggest an available weight and rep target from confirmed RIR history, but never applies a change automatically. There is no K2 integration.
+## Technical flow
 
-These documents preserve project context and planned requirements; their embedded instructions are not standalone authorization to execute work. They describe the intended product, not proof that features are implemented.
+```mermaid
+flowchart TD
+    A["Right AirPod motion<br/>acceleration · rotation · gravity · attitude"]
+    B["CMHeadphoneMotionManager"]
+    C["HeadphoneMotionProvider"]
+    D["CaptureModel<br/>ordered event routing and lifecycle"]
 
-## Current implementation
+    A --> B --> C --> D
 
-LiftPod is a native iPhone app with a manual exercise workout flow, raw AirPods motion capture, and an experimental signal lab. It uses Apple's public `CMHeadphoneMotionManager` API and requires iOS 18.0 or later.
+    D -->|Manual set| E["GenericRepSession"]
+    D -->|Automatic workout| F["AutoWorkoutSession"]
 
-## Workout flow
+    subgraph SIGNAL["Shared signal processing"]
+        G["50 Hz streaming resampler"]
+        H["GenericFeaturePipeline<br/>world acceleration · rotation · gravity"]
+        I["Pattern learning and cycle matching"]
+    end
 
-The default screen accepts a manually selected exercise, goal, load in pounds, rep range, target RIR, and available weight increment. Generic movement counting learns the repeated movement within each explicitly bounded set. Detector modes and bundled exercise profiles remain in the developer lab rather than crowding workout setup.
+    E --> G
+    F --> G
+    G --> H --> I
 
-1. Connect motion, confirm the right-AirPod mount, and tap **Start First Set**. This creates the workout session and begins the set.
-2. Perform consistent repetitions. Generic counting learns from matching cycles and backfills qualified early repetitions; profile-based developer modes retain their hold-still preparation.
-3. The live view shows committed reps plus one coaching state and its measured reason. Unavailable evidence never changes the rep count or produces load advice.
-4. Tap **End Set** to finalize pending metrics. The result shows reps, target outcome, qualified slowdown when available, and one constrained next-set recommendation.
-5. During rest, start the next set, adjust its prescription, or finish the workout. Automatic or corrected RIR can inform rest guidance and later bounded load recommendations. Confirmed sets appear in the notebook.
+    I --> J["Authorized rep cycles"]
+    J --> K["DevicePathMetrics<br/>quality-gated 3D speed"]
 
-Empty sets are never created. Disconnects and silent streams interrupt the workout and retain detected reps. A rep crossing a confirmed manual boundary is excluded. Confirmed workout history is separate from replayable sensor archives, so an incorrect detection does not become permanent without review. [Automatic-RIR research](RIR-VELOCITY-RESEARCH.md), [rest-time research](REST-TIME-RESEARCH.md), and [load-prediction research](LOAD-PREDICTION-RESEARCH.md) document the current models, evidence, and limits.
+    J --> L["Manual set boundary"]
+    J --> M["AutoSetCoordinator<br/>work/rest grouping and set sealing"]
+    L --> N["WorkoutModel + WorkoutSessionReducer"]
+    M --> N
+    K --> N
 
-## Interface design
+    H -. optional .-> O["ExerciseClassificationSession"]
+    O --> P["Suggested exercise<br/>user confirms uncertain results"]
+    P --> N
 
-The native workout interface follows the supplied Claude Design export: blue halos, translucent controls, compact live status/timer pills, and a set timeline. Workout setup is available from the ready screen; Support contains searchable device/workout help and diagnostics access. Displayed reps and pace come from accepted detector events, not the export's simulated data.
+    N --> Q["Live workout UI<br/>reps · pace · speed · rest"]
+    N --> R["Set recording<br/>raw CSV · JSONL journal · prepared frames"]
 
-[GUI-requests.md](GUI-requests.md) tracks visual adaptations, missing information, and deferred GUI work.
+    R --> S["PostSetPhaseService"]
+    J --> S
+    S --> T["Gravity/PCA phase proposals<br/>counter association · drift checks"]
+    T --> U["Average up speed<br/>Average down speed"]
+    U --> Q
 
-## Requirements and setup
+    N --> V["User-confirmed workout history"]
+    N -->|Coaching enabled| W["Compact AISetRequest"]
+    W --> X["OpenAI Responses API<br/>structured JSON response"]
+    X --> Y["RIR · coaching note · rest<br/>editable next-set prefill"]
+    Y --> Q
+```
 
-- Xcode 16 or later and an iPhone running iOS 18.0 or later
-- Compatible AirPods with headphone motion support
-- A physical iPhone for real motion data; the simulator cannot provide AirPods motion samples
+The counter owns rep identity. Speed, phase, exercise classification, and AI
+coaching consume those reps as supporting evidence; none of them can create a
+rep by themselves.
 
-Open `LiftPod.xcodeproj` in Xcode. Select the LiftPod app target, open Signing & Capabilities, and choose your own development team. Build and run on the iPhone. The project can be regenerated after editing `project.yml` with:
+## Workout lifecycle
+
+### Manual sets
+
+1. The user connects motion, confirms the right-AirPod mount, and chooses a
+   prescription.
+2. **Start First Set** freezes the prescription and starts a replayable recording.
+3. The generic detector learns from repeated cycles, then backfills qualifying
+   early cycles and counts subsequent matches.
+4. **End Set** closes the counting boundary and finalizes pending metrics.
+5. Post-set analysis associates physical phase proposals with the counted reps
+   and calculates average up/down speed from estimates that pass quality checks.
+6. The user reviews the exercise, weight, rep count, and optional RIR before the
+   set enters permanent workout history.
+
+### Automatic sets
+
+Automatic mode runs one continuous capture. Repeated cycles open a set; sustained
+quiet becomes estimated recovery; and the coordinator seals a set only after its
+boundary is resolved. The user can pause tracking, end the current set immediately,
+correct counts, or finish the workout. Disconnects and invalid timelines create
+explicit unavailable intervals instead of inventing rest or bridging motion gaps.
+
+## Signal and rep processing
+
+Raw callbacks are resampled onto a deterministic 50 Hz timeline. Each prepared
+frame contains filtered motion features in a world-relative representation. The
+generic detector learns a 64-frame pattern, tracks ordered progress through that
+pattern, and requires sufficient coverage, duration, endpoint agreement, and
+repeatability before authorizing a cycle.
+
+The same ordered inputs and frozen configuration drive recording and replay.
+Source-time gaps, backward clocks, sensor-side changes, and orientation failures
+cut the current evidence epoch. This prevents a rep from spanning missing or
+incompatible data.
+
+## Speed and phase metrics
+
+Whole-rep speed is estimated from the reconstructed 3D path of the AirPod. The
+fit checks acceleration bias, endpoint velocity consistency, displacement
+closure, uncertainty, and sensitivity to boundary shifts. A failed metric remains
+unavailable and never changes the rep count.
+
+After the set, `PostSetPhaseService` reads the complete prepared-motion history.
+It compares principal-motion-axis and gravity-aligned cycle proposals, associates
+them one-to-one with counted reps, identifies opposing upward/downward travel, and
+reuses the 3D path estimator for each phase. The post-set card displays the mean
+of valid upward estimates and the mean of valid downward estimates. These are
+AirPod path-speed estimates, not barbell velocity or anatomical
+eccentric/concentric labels.
+
+## Exercise recognition
+
+Exercise recognition is optional and experimental. It is available for generic
+manual sets and operates beside the rep counter. The classifier can label a set,
+but it does not select a detector or alter counted reps. While evidence is still
+forming the UI shows **Detecting…**; unknown results are presented as
+**Other / not sure** and must be confirmed before saving or requesting AI coaching.
+
+## AI coaching
+
+When enabled, the iPhone sends an end-of-set summary directly to the OpenAI
+Responses API. The request contains the confirmed prescription and rep count,
+ordered available speed/time measurements, overall speed degradation, and
+optional user-confirmed RIR. The response is constrained to structured JSON and
+can provide:
+
+- an estimated completed-set RIR;
+- a short coaching note and at most one supported rep cue;
+- a rest recommendation; and
+- an editable next-set weight, rep, and target-RIR prefill.
+
+The user remains in control of saved history and the next prescription. See
+[AI_COACHING.md](AI_COACHING.md) for configuration and the evidence boundaries
+used by the coach.
+
+## Data and replay
+
+Workout recordings are stored under Application Support and can be exported as a
+ZIP from the developer interface. Depending on the capture mode, a bundle includes:
+
+| File | Purpose |
+| --- | --- |
+| `raw-motion.csv` | Original Core Motion callbacks and timestamps |
+| `processor-transactions.jsonl` | Ordered processor inputs and deterministic hashes |
+| `prepared-motion.jsonl` | Resampled, filtered frames used by metrics and phase analysis |
+| `summary.json` | Authorized cycles, metrics, and final processor state |
+| `set-summary.json` | Workout-facing result for a completed set |
+| `post-set-phase-analysis.json` | Derived phase boundaries, directions, and aggregate metrics |
+| `*-configuration.json` | Frozen detector/session configuration |
+| `*-manifest.json` | Counts and hashes used to verify replay integrity |
+
+Derived analysis sidecars do not change the original transaction hashes. Workout
+history stores only sets the user confirms; editing history does not rewrite the
+raw recording.
+
+## Project layout
+
+| Path | Responsibility |
+| --- | --- |
+| `LiftPod/Motion` | AirPods connection and Core Motion provider abstraction |
+| `LiftPod/State/CaptureModel.swift` | Capture ownership, ordered routing, app lifecycle, and automatic-workout bridge |
+| `LiftPod/ExperimentalV2` | Resampling, generic detection, automatic grouping, metrics, phase analysis, recording, and replay |
+| `LiftPod/Workout` | Workout state, history, exercise recognition, coaching, and SwiftUI screens |
+| `LiftPod/Recording` | Standalone raw CSV recording |
+| `LiftPod/Preprocessing` | Offline CSV validation and vertical-signal preprocessing |
+| `LiftPodTests` | Deterministic unit, integration, fixture, recovery, and replay tests |
+| `research` | Offline experiments, recorded evaluations, and analysis reports |
+| `training` | Portable exercise-classifier tooling and model verification |
+
+## Requirements
+
+- Xcode 16 or later
+- iOS 18.0 or later
+- A physical iPhone
+- Compatible AirPods with headphone-motion support
+- A consistent right-AirPod mount on the moving weight
+
+The simulator can exercise deterministic logic and UI state, but it cannot supply
+real AirPods motion data.
+
+## Build and run
+
+1. Open `LiftPod.xcodeproj` in Xcode.
+2. Select the **LiftPod** target and choose your Apple development team under
+   Signing & Capabilities.
+3. Connect an iPhone, select it as the run destination, and build the app.
+4. Grant Motion & Fitness permission when prompted.
+5. Connect compatible AirPods. For testing outside the ear, disable Automatic Ear
+   Detection in iOS Settings.
+6. Secure the right AirPod consistently to the weight and start motion from the
+   workout setup flow.
+
+`project.yml` is the source for project generation when target membership or build
+settings change:
 
 ```sh
 xcodegen generate
 ```
 
-Motion permission is required so the app can read, display, and save raw AirPods sensor readings. Press **Start Motion** and grant permission when prompted. The status area reports permission, availability, connection, and stream state. Press **Stop Motion** to end the stream.
+Build the simulator target from the command line with:
 
-While motion monitoring is active, press **Start Recording** to write every callback to a CSV. Press **Stop Recording** to flush and close the file, then use **Export Last Recording** to open the standard iOS share sheet.
+```sh
+xcodebuild build \
+  -project LiftPod.xcodeproj \
+  -scheme LiftPod \
+  -destination 'generic/platform=iOS Simulator'
+```
 
-## CSV columns
+Run the `LiftPodTests` scheme from Xcode against an available iOS simulator. The
+suite covers rep authorization, automatic set ownership, recovery, recording,
+replay, device-path metrics, phase analysis, workout history, exercise review,
+and AI request/response validation.
 
-Each file contains one header followed by one row per recorded callback:
+## Current limitations
 
-| Column | Definition and unit |
-| --- | --- |
-| `index` | Sequential callback number for the monitoring run |
-| `source_timestamp` | Core Motion monotonic timestamp, seconds |
-| `receipt_uptime` | Local monotonic system uptime at receipt, seconds |
-| `sensor_location` | Reported left headphone, right headphone, default, or unknown raw value |
-| `user_acceleration_x/y/z` | User acceleration, g |
-| `gravity_x/y/z` | Gravity vector, g |
-| `rotation_rate_x/y/z` | Rotation rate, radians per second |
-| `quaternion_w/x/y/z` | Attitude quaternion components |
-| `roll`, `pitch`, `yaw` | Attitude angles, radians |
+- Rep and set recognition depend on a repeatable mount and sufficiently consistent
+  movement.
+- Exercise classification covers a limited label set and is not accurate enough
+  to control the counter.
+- Speed is measured at the AirPod and can be unavailable when drift, uncertainty,
+  orientation, or boundary checks fail.
+- Up/down phases are approximate signal-derived segments. They do not establish
+  exercise technique, muscle tension, or universal eccentric/concentric timing.
+- AI coaching is advisory and depends on the measurements and confirmations sent
+  with that set.
+- Simulator and synthetic tests verify software behavior; physical accuracy must
+  be assessed with real recordings across people, exercises, tempos, and mounts.
 
-## Offline preprocessing
+## Further documentation
 
-Use **Import Raw CSV** to select a CSV previously recorded by the app. Processing validates callback order, timestamps, gravity, and source-time gaps; evaluates an initial stationary calibration window; projects user acceleration onto physical up using the measured gravity vector; removes the estimated stationary vertical bias; and applies a causal first-order low-pass filter using each actual source-time interval. The imported file is read without being modified.
-
-The measured gravity vector defines physical down, and its normalized negative defines physical up. Vertical acceleration is positive upward (opposite gravity) and negative downward (along gravity); roll, pitch, yaw, and fixed device axes are not used. The initial window must remain stationary for at least the configured duration and sample count and stay within the acceleration and gyroscope limits, or processing stops with all applicable calibration failures.
-
-For each sample after the first, the filter uses `alpha = 1 - exp(-2 × π × cutoffFrequency × dt)` and `filtered = previousFiltered + alpha × (corrected - previousFiltered)`, where `dt` is the actual adjacent source-time interval. The first filtered value equals the first bias-corrected value.
-
-After successful processing, the app displays the source and calibration measurements. Use **Export Processed CSV** to share the separately generated file. Processed files contain:
-
-| Column | Definition and unit |
-| --- | --- |
-| `index` | Original callback index |
-| `source_timestamp` | Original Core Motion monotonic timestamp, seconds |
-| `delta_time` | Time since the preceding source sample, seconds; zero for the first frame |
-| `sensor_location` | Original reported sensor location |
-| `gravity_magnitude_g` | Gravity-vector magnitude, g |
-| `gyroscope_magnitude_rad_s` | Gyroscope magnitude, radians per second |
-| `vertical_acceleration_raw_m_s2` | User acceleration projected onto physical up, metres per second squared |
-| `vertical_acceleration_corrected_m_s2` | Raw vertical acceleration minus stationary bias, metres per second squared |
-| `vertical_acceleration_filtered_m_s2` | Causal low-pass-filter output, metres per second squared |
-| `is_calibration_sample` | Whether the frame is in the initial calibration window |
-
-The preprocessing thresholds are configurable engineering defaults awaiting evaluation with physical data: standard gravity `9.80665 m/s²`, calibration duration `3.0 s`, minimum calibration count `60`, plausible gravity magnitude `0.75–1.25 g`, maximum adjacent source gap `0.200 s`, maximum calibration vertical-acceleration standard deviation `0.20 m/s²`, maximum calibration gyroscope RMS `0.15 rad/s`, and low-pass cutoff `5.0 Hz`.
-
-## Experimental V6 Signal Lab
-
-**Experimental V6 Signal Lab** is a separate engineering screen for live signal analysis. Raw capture and offline preprocessing remain independent. Manual exercise selection is the only authorization source; no exercise classifier is enabled.
-
-The bundled right-side biceps-curl and lateral-raise profiles are available through manual selection. They assume a repeatable right-AirPod mounting orientation and a held weight. Their thresholds remain experimental and setup-dependent. Overhead presses remain unavailable until guided calibration or import supplies an eligible full-cycle profile. Generated and imported profiles are never automatically marked validated.
-
-### Preparation and curl segmentation
-
-Starting a set validates the frozen profile and setup, starts recording, clears all processor state, and enters **Preparing**. The user holds the weight still for at least three seconds. A rolling 500–750 ms reference window uses robust activity, signal spread, median absolute deviation, drift, quaternion-center, gravity, noise, and observed-rate measurements. Brief isolated corrections are tolerated; sustained motion or orientation drift prevents readiness.
-
-Three frozen detector profiles are available for comparison. **Qualified local cycle (V4)** retains the scalar gravity projection. **Fixed-axis angular (V5)** projects gravity into the plane normal to a fixed unit axis, computes signed angle with `atan2(axis · (reference × current), reference · current)`, unwraps the result continuously, and checks signed gyroscope direction. **Adaptive-axis (V6)** estimates a candidate-local rotation axis from gyroscope samples after removing the component parallel to gravity. It uses a deterministic 24-iteration principal-axis solve, requires at least 0.80 energy fraction and 0.85 directional coherence across 180–700 ms, and freezes the axis only after three estimates remain within 0.12 radians.
-
-All modes feed the same qualified-cycle state machine. It tracks a qualified bottom, persistent departure, local top, direction reversal, lowest credible return, a pending-bottom state, and settled or next-leg completion. Outbound and return excursion, signed direction, reference bounds, phase ordering, duration, turnaround pause, and per-guard persistence are checked explicitly. The adaptive detector additionally requires at least 0.65 of cycle gyroscope energy along its frozen axis. Degenerate projected gravity, excessive unwrap steps, incoherent axes, ambiguous rebounds, and discontinuities reject or abandon the candidate and require a quiet near-reference recovery before another adaptive candidate can begin.
-
-### Templates and guided calibration
-
-Full-cycle profiles use 64 frames and ten filtered channels: three user-acceleration axes, three rotation-rate axes, three gravity axes, and acceleration projected onto physical up. Matching uses one deterministic multichannel dynamic-time-warping path, a 20% Sakoe-Chiba band, frozen training scales, fixed amplitude, endpoint checks, negative-template margin, aligned landmarks, and independent evidence on both movement legs. Missing braking or return evidence cannot be hidden by a favorable average score.
-
-Guided calibration accepts exactly three uninterrupted demonstrations with cue timestamps. It evaluates deterministic 2, 3, 4, 5, and 6 Hz Butterworth filters. Coherent curl or lateral-raise gravity movement can produce a local-cycle profile; overhead press and incoherent-but-observable motion use full-cycle templates. Calibration requires continuous 50 Hz input and observable acceleration or rotation in every demonstration.
-
-### Set lifecycle, recording, and replay
-
-Sets progress through **Idle**, **Preparing**, **Active**, **Finalizing**, **Complete**, or **Interrupted**. End Set is accepted only while Active. Finalizing admits no new departure and provides up to 400 ms of source time for an already-observed return to settle; the return must have completed by the end-request timestamp. Disconnects, stale receipt, wrong-side data, invalid or backward timestamps, backgrounding, recording failure, queue overflow, and cancellation interrupt the set. Interrupted recordings are not presented as successful validation recordings.
-
-Every set freezes its profile identifier and SHA-256 DSP-content hash. The self-contained session bundle includes raw CSV, ordered processor JSONL, metadata, summary, analysis manifest, and the complete profile. Raw callbacks are recorded once; wrong-side samples may be retained diagnostically but are not valid detector input. V2 replay requires a complete archive, contiguous sequence numbers, start/end boundaries, matching profile hashes and versions, finite values, and matching deterministic output hashes. Floating-point DSP comparisons use a `1e-9` tolerance where reconstruction is required.
-
-Human reviews are new UUID-named sidecars containing an optional independently observed count, committed count, notes, and UTC creation time. Saving one never changes raw data, transactions, candidates, summaries, or prior reviews. SYNC markers estimate source time for external-video alignment, but UI presentation and transport delay remain, so alignment must be checked independently.
-
-Offline evaluation separates fitting, validation, and untouched evaluation trials and rejects trial or remount leakage. Fitting requires normal, slow, and fast complete examples plus negative subtypes. Candidate templates use deterministic medoids and frozen per-channel scales. Selection uses validation data only, favors a local fixed projection within 0.5 percentage points of the best validation F1, and reports evaluation metrics separately without automatic promotion. Reports include one-to-one completion matching, count and timing errors, edge-rep recall, negative rates/subtypes, and Wilson intervals.
-
-Synthetic and simulator tests validate deterministic mechanics, not physical counting accuracy. Template calibration without independent negative validation may overfit. Physical-device performance and accuracy remain unverified until the physical procedure below is completed and independently reviewed.
-
-## Physical-device smoke test
-
-This procedure requires real hardware and is not performed by automated tests:
-
-1. Install the application on a physical iPhone running iOS 18 or later.
-2. Connect compatible AirPods.
-3. Open the app and grant motion permission.
-4. Press Start Motion.
-5. Confirm that the connection or waiting state is visible.
-6. Move one AirPod.
-7. Confirm that raw values and callback count change.
-8. Confirm that the reported sensor location is visible.
-9. Press Start Recording.
-10. Move the AirPod for several seconds.
-11. Press Stop Recording.
-12. Export the CSV.
-13. Confirm that the CSV contains a header and multiple data rows.
-14. Confirm that each row contains the reported sensor location and raw motion fields.
-15. Disconnect the AirPods and confirm that the app reports the interruption without crashing.
-16. Reconnect, open Experimental V6 Signal Lab, confirm the right-side mounting setup, choose a detector, and start a curl set.
-17. Hold the loaded starting position still until the reference becomes ready and the set becomes Active.
-18. Perform slow, normal, partial-return, and complete curls while independently recording observations.
-19. End the set, allow Finalizing to complete, and export the full session bundle.
-20. Verify raw rows, transaction ordering, manifest counts, frozen profile hash, replay result, and interruption handling.
-
-For testing with an AirPod outside the ear, manually disable Automatic Ear Detection in iOS Settings.
-
-## GPT end-of-set coaching
-
-The workout screen supports AI-estimated completed-set RIR, coaching notes based on compact per-rep speed summaries, and structured next-set targets. The iPhone calls OpenAI directly. See [AI coaching setup](AI_COACHING.md) to enter your API key and enable it in workout setup.
+- [Automatic workout sets](AUTOMATIC_WORKOUT_SETS.md)
+- [AI coaching](AI_COACHING.md)
+- [Generic rep cycle mode](GENERIC_REP_CYCLE_MODE.md)
+- [Post-set phase analysis](research/post-set-phase/README.md)
+- [RIR and velocity research](RIR-VELOCITY-RESEARCH.md)
+- [Rest-time research](REST-TIME-RESEARCH.md)
+- [Load-prediction research](LOAD-PREDICTION-RESEARCH.md)
