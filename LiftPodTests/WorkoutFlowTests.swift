@@ -232,7 +232,8 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
             historyFileURL: directory.appendingPathComponent("history.json"), analyzeAI: { input, _, _ in
                 sentStreams.append(input)
                 return AISetAdvice(estimatedRIR: 3, confidence: "low", notes: "Test stream analysis.",
-                    weakPoints: [], nextSet: .init(loadLB: 30, reps: 10, targetRIR: 2))
+                    weakPoints: [], nextSet: .init(loadLB: 30, reps: 10, targetRIR: 2),
+                    rest: .init(seconds: 150, reason: "Recover before the heavier set."))
             })
         capture.startMotion()
         provider.emit(.sample(experimentalRawSample(index: 0, time: 0,
@@ -289,6 +290,8 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         let savedAI = try JSONDecoder().decode(WorkoutSetResult.self,
             from: Data(contentsOf: XCTUnwrap(model.summaryURL)))
         XCTAssertEqual(savedAI.aiAdvice?.estimatedRIR, 3)
+        XCTAssertEqual(savedAI.aiAdvice?.rest?.seconds, 150)
+        XCTAssertEqual(model.latestSetResult?.aiAdvice?.rest?.reason, "Recover before the heavier set.")
         let source = LoggedWorkoutSet(id: UUID(), sessionID: UUID(), sourceSetID: "recommendation",
             exercise: .bicepsCurl, loadLB: 40, reps: 8, repsInReserve: 2,
             averageRepDuration: nil, performedAt: Date(), velocityProfile: nil,
@@ -328,6 +331,10 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
             await Task.yield()
         }
         model.countingMode = .exercise
+        let recommendedRest = try XCTUnwrap(model.latestSetResult?.aiAdvice?.rest?.seconds)
+        let restStarted = try XCTUnwrap(model.restStart)
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - restStarted, Double(recommendedRest))
+        XCTAssertTrue(model.canStart(capture), "Recommended rest is advisory; an early next set must remain available.")
         await model.startSet(capture)
         XCTAssertEqual(model.state, .preparing)
         XCTAssertEqual(model.activePrescription.loadLB, 30)
@@ -901,6 +908,32 @@ final class RIRReliabilityTests: XCTestCase {
 }
 
 final class AIWorkoutCoachTests: XCTestCase {
+    func testRestHasItsOwnRequiredSchemaSectionAndSurvivesDecoding() throws {
+        let schema = try AIWorkoutCoach.responseSchema(for: input())
+        XCTAssertTrue(try XCTUnwrap(schema["required"] as? [String]).contains("rest"))
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let rest = try XCTUnwrap(properties["rest"] as? [String: Any])
+        let object = try XCTUnwrap((rest["anyOf"] as? [[String: Any]])?.first)
+        XCTAssertEqual(object["required"] as? [String], ["seconds", "reason"])
+        let advice = AISetAdvice(estimatedRIR: 2, confidence: "medium", notes: "You kept a steady pace.",
+            weakPoints: [], nextSet: nil, rest: .init(seconds: 120, reason: "Recover for another steady set."))
+        let decoded = try JSONDecoder().decode(AISetAdvice.self, from: JSONEncoder().encode(advice))
+        XCTAssertEqual(try decoded.validatedForDisplay(for: input()).rest, advice.rest)
+    }
+
+    func testInvalidRestDoesNotDiscardCoachingAndOldAdviceStillLoads() throws {
+        let advice = AISetAdvice(estimatedRIR: 2, confidence: "medium", notes: "Steady pace.",
+            weakPoints: [], nextSet: nil, rest: .init(seconds: 0, reason: "No rest"))
+        let displayed = try advice.validatedForDisplay(for: input())
+        XCTAssertNil(displayed.rest)
+        XCTAssertEqual(displayed.notes, advice.notes)
+        XCTAssertEqual(displayed.estimatedRIR, 2)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(advice)) as? [String: Any])
+        json.removeValue(forKey: "rest")
+        XCTAssertNil(try JSONDecoder().decode(AISetAdvice.self,
+            from: JSONSerialization.data(withJSONObject: json)).rest)
+    }
+
     func testUnknownWeightAllowsNotesButDisallowsInventedLoad() throws {
         let measured = input()
         let request = AISetRequest(prescription: .init(), reps: measured.reps,

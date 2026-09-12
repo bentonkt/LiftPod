@@ -255,11 +255,18 @@ struct WorkoutView: View {
                            label: set.interrupted ? "SET INTERRUPTED" : "SET \(workout.completedSetResults.count) COMPLETE",
                            pace: set.averageRepDuration)
                 RepTargetBar(reps: set.reps, target: set.prescription.maximumReps)
-                HStack {
-                    liveMetric("AI ESTIMATED RIR", set.aiAdvice?.estimatedRIR.map(String.init) ?? "—")
-                    liveMetric("CONFIDENCE", set.aiAdvice?.confidence.uppercased() ?? (workout.aiLoading ? "ANALYZING" : "UNAVAILABLE"))
-                }
-                setSpeedReadout(set, rir: set.aiAdvice?.estimatedRIR.map { "\($0) · AI estimate" } ?? (workout.aiLoading ? "Analyzing…" : "Unavailable"), showsRIR: true).font(.subheadline)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    liveMetric("AVERAGE SPEED", set.averageSpeedMPS.map {
+                        "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
+                    } ?? "—")
+                    liveMetric("PEAK SPEED", set.peakSpeedMPS.map {
+                        "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
+                    } ?? "—")
+                    liveMetric("RIR", set.aiAdvice?.estimatedRIR.map(String.init) ?? (workout.aiLoading ? "Analyzing…" : "—"))
+                    liveMetric("SPEED DEGRADATION", set.slowdownPercent.map {
+                        "\($0.formatted(.number.precision(.fractionLength(0))))%"
+                    } ?? "—")
+                }.accessibilityIdentifier("set-speed-metrics")
                 Text(set.targetDescription).font(.subheadline).foregroundStyle(.secondary)
             }.accessibilityIdentifier("set-result")
             if let logged = workout.latestLoggedSet {
@@ -278,16 +285,19 @@ struct WorkoutView: View {
                         .font(.system(size: 28, weight: .medium)).monospacedDigit()
                 }
                 Spacer()
-                if let recommendation = workout.restRecommendation ?? RestRecommendation(
-                    reps: set.reps, repsInReserve: nil, velocityLossPercent: set.slowdownPercent
-                ) {
-                    VStack(alignment: .trailing, spacing: 6) {
-                        Text("Recommended rest").font(.caption).foregroundStyle(.secondary)
-                        Text(clock(Double(recommendation.seconds)))
-                            .font(.system(size: 28, weight: .semibold)).monospacedDigit()
-                            .foregroundStyle(LiftStyle.blue)
-                    }.accessibilityIdentifier("recommended-rest")
-                }
+                VStack(alignment: .trailing, spacing: 6) {
+                    Text("Recommended Rest").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                    Text(set.aiAdvice?.rest.map { clock(Double($0.seconds)) } ?? (workout.aiLoading ? "Analyzing…" : "—"))
+                        .font(.system(size: 28, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(LiftStyle.blue)
+                    if let rest = set.aiAdvice?.rest {
+                        Text(rest.reason).font(.footnote).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                    } else if !workout.aiLoading {
+                        Text(aiCoachEnabled ? "No rest suggestion" : "Enable coaching in setup for rest suggestions")
+                            .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                    }
+                }.accessibilityIdentifier("recommended-rest")
             }.padding(18).glass(radius: 22)
             aiNotes(set)
             nextSetCard
@@ -297,13 +307,12 @@ struct WorkoutView: View {
 
     private func aiNotes(_ set: WorkoutSetResult) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("AI COACH NOTES").font(.caption.weight(.semibold)).tracking(1.4)
+            Text("COACH NOTES").font(.caption.weight(.semibold)).tracking(1.4)
             if let advice = set.aiAdvice {
                 Text(advice.notes).textSelection(.enabled)
                 ForEach(advice.validationWarnings ?? [], id: \.self) { warning in
                     Label(warning, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
                 }
-                Text("\(advice.confidence.capitalized) confidence").font(.caption).foregroundStyle(.secondary)
                 ForEach(Array(advice.weakPoints.enumerated()), id: \.offset) { _, point in
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Rep \(point.rep)")
@@ -314,7 +323,7 @@ struct WorkoutView: View {
                 }
                 if let next = advice.nextSet {
                     Divider()
-                    Text("NEXT SET · AI SUGGESTION").font(.caption.weight(.semibold))
+                    Text("NEXT SET · SUGGESTION").font(.caption.weight(.semibold))
                     Text("\(next.loadLB.formatted()) lb × \(next.reps) · \(next.targetRIR) RIR")
                         .font(.title3.weight(.semibold))
                     Button(workout.isNextSetSelected(loadLB: next.loadLB, reps: next.reps, rir: next.targetRIR) ? "Selected" : "Use next set") {
@@ -328,9 +337,9 @@ struct WorkoutView: View {
             } else if workout.aiLoading {
                 ProgressView("Analyzing your set…")
             } else if set.interrupted || set.reps == 0 {
-                Text("AI analysis unavailable for an interrupted or empty set.").foregroundStyle(.secondary)
+                Text("Analysis unavailable for an interrupted or empty set.").foregroundStyle(.secondary)
             } else if !aiCoachEnabled {
-                Text("Enable AI coaching in setup to analyze rep speeds and estimate RIR.").foregroundStyle(.secondary)
+                Text("Enable coaching in setup to analyze rep speeds and estimate RIR.").foregroundStyle(.secondary)
             }
             if let error = workout.aiError { Text(error).font(.footnote).foregroundStyle(.secondary) }
             if aiCoachEnabled && !workout.aiLoading && !set.interrupted && set.reps > 0 {
