@@ -158,6 +158,17 @@ struct WorkoutView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }.multilineTextAlignment(.center)
             LiftHalo(reps: workout.reps, connected: signalLive).frame(maxWidth: 310).padding(.horizontal, 8)
+            HStack(spacing: 8) {
+                liveMetric("SPEED", workout.liveRepSpeedMPS.map {
+                    "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
+                } ?? "—")
+                liveMetric("DEGRADATION", workout.liveSpeedDegradationPercent.map {
+                    "\($0.formatted(.number.precision(.fractionLength(0))))%"
+                } ?? "—")
+                liveMetric("RIR", workout.liveRIRDescription ?? "—")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("live-set-metrics")
             VStack(spacing: 8) {
                 if workout.state == .preparing {
                     Text("Hold weight still…").font(.headline).foregroundStyle(.primary)
@@ -170,12 +181,33 @@ struct WorkoutView: View {
                     Text(workout.coaching.state.title.uppercased())
                         .font(.system(size: 22, weight: .semibold)).tracking(1.2).foregroundStyle(.primary)
                         .accessibilityIdentifier("workout-coaching-state")
-                    Text(workout.coaching.explanation).font(.subheadline)
+                    Text("Target \(workout.activePrescription.minimumReps)–\(workout.activePrescription.maximumReps) reps").font(.subheadline)
                         .accessibilityIdentifier("workout-coaching-reason")
                 }
             }.font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Spacer(minLength: 12)
         }
+    }
+
+    private func liveMetric(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 5) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(value)
+                .font(.system(size: 15, weight: .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 12)
+        .glass(radius: 17)
+        .accessibilityElement(children: .combine)
     }
 
     private func betweenSets(_ set: WorkoutSetResult) -> some View {
@@ -186,34 +218,43 @@ struct WorkoutView: View {
                     .font(.system(size: 14, weight: .semibold)).tracking(1.8).foregroundStyle(.secondary)
                 Text("\(set.reps) reps")
                     .font(.system(size: 38, weight: .semibold)).tracking(-1)
-                setSpeedReadout(set).font(.subheadline)
+                setSpeedReadout(set, rir: workout.latestSetRIRDescription, showsRIR: true).font(.subheadline)
                 Text(set.targetDescription).font(.subheadline).foregroundStyle(.secondary)
             }.accessibilityIdentifier("set-result")
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("REST").font(.caption.weight(.semibold)).tracking(1.4).foregroundStyle(.secondary)
+                    Text(clock(max(0, now - (workout.restStart ?? now))))
+                        .font(.system(size: 28, weight: .medium)).monospacedDigit()
+                }
+                Spacer()
+                if let recommendation = workout.restRecommendation ?? RestRecommendation(
+                    reps: set.reps, repsInReserve: nil, velocityLossPercent: set.slowdownPercent
+                ) {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Text("Recommended rest").font(.caption).foregroundStyle(.secondary)
+                        Text(clock(Double(recommendation.seconds)))
+                            .font(.system(size: 28, weight: .semibold)).monospacedDigit()
+                            .foregroundStyle(LiftStyle.blue)
+                    }.accessibilityIdentifier("recommended-rest")
+                }
+            }.padding(18).glass(radius: 22)
             if let prediction = workout.loadPrediction() {
                 nextSetCard(prediction)
             } else if let plan = set.nextSetPlan {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("NEXT SET").font(.caption.weight(.semibold)).tracking(1.6).foregroundStyle(.secondary)
                     Text(plan.title).font(.system(size: 24, weight: .semibold))
-                    Text(plan.explanation).font(.subheadline).foregroundStyle(.secondary)
+                    Text(nextSetCaption(plan.action)).font(.subheadline).foregroundStyle(.secondary)
                 }.padding(22).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 24)
                     .accessibilityIdentifier("next-set-plan")
-            }
-            HStack(spacing: 12) {
-                Label("Rest · \(clock(max(0, now - (workout.restStart ?? now))))", systemImage: "timer")
-                if let recommendation = workout.restRecommendation {
-                    Text("Suggested \(clock(Double(recommendation.seconds)))")
-                        .fontWeight(.semibold).foregroundStyle(LiftStyle.blue)
-                }
-            }.font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
-            if let recommendation = workout.restRecommendation {
-                Text(recommendation.explanation).font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func setSpeedReadout(_ set: WorkoutSetResult) -> some View {
+    private func setSpeedReadout(_ set: WorkoutSetResult, rir: String? = nil,
+                                 showsRIR: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             LabeledContent("Peak speed", value: set.peakSpeedMPS.map {
                 "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
@@ -221,6 +262,9 @@ struct WorkoutView: View {
             LabeledContent("Speed degradation", value: set.slowdownPercent.map {
                 "\($0.formatted(.number.precision(.fractionLength(0))))%"
             } ?? "Not measured")
+            if showsRIR {
+                LabeledContent("RIR", value: rir ?? "Not measured")
+            }
         }.monospacedDigit().foregroundStyle(.secondary)
             .accessibilityIdentifier("set-speed-metrics")
     }
@@ -409,6 +453,15 @@ struct WorkoutView: View {
     private func metric(_ name: String, _ value: String) -> some View {
         HStack { Text(name).foregroundStyle(.secondary); Spacer(); Text(value).fontWeight(.medium).monospacedDigit() }.font(.system(size: 15))
     }
+    private func nextSetCaption(_ action: NextSetAction) -> String {
+        switch action {
+        case .keepLoad: "Keep this weight"
+        case .lowerLoad: "Try one step lighter"
+        case .considerHeavierLoad: "Try one step heavier"
+        case .noRecommendation: "Choose your next set"
+        }
+    }
+
     private func nextSetCard(_ prediction: LoadPrediction) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("NEXT SET")
@@ -420,10 +473,10 @@ struct WorkoutView: View {
                 Text("\(prediction.targetRIR) RIR")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(LiftStyle.blue)
             }
-            Text(prediction.explanation).font(.footnote).foregroundStyle(.secondary)
+            Text(prediction.action == .increase ? "Try one step heavier" : prediction.action == .decrease ? "Try one step lighter" : "Keep this weight").font(.footnote).foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button(prediction.loadLB == workout.prescription.loadLB ? "Selected" : "Use for next set") {
+                Button(prediction.loadLB == workout.prescription.loadLB ? "Selected" : "Use next set") {
                     workout.use(prediction)
                 }
                 .font(.subheadline.weight(.semibold))
@@ -487,18 +540,10 @@ private struct SetReviewView: View {
                         LabeledContent("Rep speed loss",
                             value: "\(estimate.velocityLossPercent.formatted(.number.precision(.fractionLength(0))))%")
                         LabeledContent("Estimated range", value: estimate.rangeDescription)
-                        LabeledContent("Model", value: estimate.method.rawValue)
-                        Text(estimate.explanation).font(.caption).foregroundStyle(.secondary)
-                        if let error = estimate.validationMAE {
-                            LabeledContent("Personal model test error", value: "\(error.formatted(.number.precision(.fractionLength(1)))) reps")
-                        }
-                        Text("Based on \(estimate.measuredRepCount) finalized rep speeds" +
-                             (estimate.calibrationSetCount > 0 ? " and \(estimate.calibrationSetCount) corrected sets." : ". Correct it when needed so the personal model can learn."))
-                            .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text(reps != draft.detectedReps
-                            ? "Rep count changed. Enter RIR for the corrected set."
-                            : "Automatic RIR needs consistent finalized speeds, including the last rep. You still receive rep-based load and rest suggestions.")
+                            ? "Update RIR after editing reps."
+                            : "Enter reps in reserve.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if let rest = RestRecommendation(
@@ -507,9 +552,8 @@ private struct SetReviewView: View {
                                ? draft.velocityProfile?.velocityLossPercent : nil
                        ) {
                         LabeledContent("Suggested rest", value: restClock(rest.seconds))
-                        Text(rest.explanation).font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("RIR means how many more good reps you believe you could have completed. The confirmed value drives suggested rest and future load estimates.")
+                    Text("RIR = reps left in reserve.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {

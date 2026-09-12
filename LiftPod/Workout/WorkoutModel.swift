@@ -235,6 +235,8 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     @Published private(set) var coaching = WorkoutCoachingSnapshot(
         state: .buildingBaseline, slowdownPercent: nil,
         explanation: "Complete three smooth reps to establish your baseline.", evidenceIsValid: false)
+    @Published private(set) var liveRepSpeedMPS: Double?
+    @Published private(set) var liveSpeedDegradationPercent: Double?
     @Published private(set) var liveRIR: AutomaticRIREstimate?
     @Published private(set) var summaryURL: URL?
 
@@ -301,6 +303,24 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         return RestRecommendation(reps: draft.detectedReps,
                                   repsInReserve: draft.automaticRIR?.repsInReserve,
                                   velocityLossPercent: draft.velocityProfile?.velocityLossPercent)
+    }
+
+    var latestSetRIRDescription: String? {
+        guard session?.current == nil, let sourceSetID = completedSets.last?.id else { return nil }
+        if let confirmed = history.sets.first(where: {
+            $0.sessionID == sessionID && $0.sourceSetID == sourceSetID
+        }), let rir = confirmed.repsInReserve {
+            return String(rir)
+        }
+        guard let estimate = pendingSetReviews.first(where: { $0.id == sourceSetID })?.automaticRIR else {
+            return nil
+        }
+        return estimate.cappedAtFourPlus ? "4+" : String(estimate.repsInReserve)
+    }
+
+    var liveRIRDescription: String? {
+        guard let liveRIR else { return nil }
+        return liveRIR.cappedAtFourPlus ? "4+" : String(liveRIR.repsInReserve)
     }
 
     func updateNextSet() {
@@ -388,6 +408,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         error = nil; result = nil; summaryURL = nil; latestSetResult = nil
         genericEventIDs = []; genericMetrics = [:]; profileLedger = .init(); profileMetrics = nil
         reps = 0; lastReceipt = nil; betweenSetStartedAt = nil
+        liveRepSpeedMPS = nil; liveSpeedDegradationPercent = nil
         liveRIR = nil; cachedRIRProfile = nil; cachedRIRPrescription = nil
         frozenPrescription = prescription
         if session == nil {
@@ -504,6 +525,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func reset() {
         guard !isRunning else { return }
+        liveRepSpeedMPS = nil; liveSpeedDegradationPercent = nil
         liveRIR = nil; cachedRIRProfile = nil; cachedRIRPrescription = nil
         state = .idle; result = nil; latestSetResult = nil; summaryURL = nil; error = nil
         reps = 0; session = nil; sessionURL = nil; completedSetResults = []; initialPrescription = nil
@@ -543,6 +565,8 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             runningGeneric ? SetVelocityProfile(set: $0, genericMetrics: Array(genericMetrics.values)) :
                 SetVelocityProfile(set: $0, metrics: profileMetrics)
         }
+        liveRepSpeedMPS = latestFinalizedRepSpeed()
+        liveSpeedDegradationPercent = velocity?.velocityLossPercent
         let signalUsable = snapshot.quality == .usable && snapshot.isRecovering != true
         if velocity != cachedRIRProfile || cachedRIRHistoryCount != history.sets.count ||
             cachedRIRPrescription != currentPrescription {
@@ -654,6 +678,9 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     private func restoreAfterAbandonedSet() {
         reps = 0
+        liveRepSpeedMPS = nil
+        liveSpeedDegradationPercent = nil
+        liveRIR = nil
         genericEventIDs = []
         genericMetrics = [:]
         profileLedger = .init()
@@ -678,6 +705,21 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         resultBeforePreparation = nil
         restStartBeforePreparation = nil
         summaryURLBeforePreparation = nil
+    }
+
+    private func latestFinalizedRepSpeed() -> Double? {
+        guard let repID = session?.current?.reps.last?.id else { return nil }
+        let speed: Double?
+        if runningGeneric {
+            let metric = genericMetrics[repID]
+            speed = metric?.status == .available ? metric?.meanSpeed : nil
+        } else {
+            speed = profileMetrics?.reps.last(where: {
+                $0.id == repID && $0.status == .available
+            })?.meanLiftingSpeed
+        }
+        guard let speed, speed.isFinite, speed > 0 else { return nil }
+        return speed
     }
 
 }

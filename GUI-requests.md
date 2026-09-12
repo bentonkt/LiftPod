@@ -6,6 +6,10 @@ Current scope: native iPhone workout tracking, manual exercise selection, explic
 
 ## Implemented adaptations
 
+- The active rep-counter screen shows the latest finalized rep speed, current speed degradation, and automatic RIR. Speed appears after the first qualified rep metric; degradation and RIR appear once the set has enough finalized speed evidence.
+- End-of-set metrics show RIR beside peak speed and speed degradation, using the confirmed value when available and the automatic estimate otherwise.
+- Next-set cards use short action captions, with confidence/model prose removed from the workout interface. Rest retains its timer and suggestion; set review retains editable RIR and its estimated range without long explanations.
+
 - Developer home exports the latest workout set as a complete ZIP; the signal lab exports its completed set as a ZIP. Raw recording export saves CSV through Files and reports failures.
 - Removed confidence labels from workout rep/load recommendations and automatic RIR text, retaining measured inputs and model details.
 
