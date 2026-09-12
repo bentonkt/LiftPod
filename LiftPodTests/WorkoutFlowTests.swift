@@ -2,6 +2,36 @@ import XCTest
 @testable import LiftPod
 
 final class ExerciseSuggestionTests: XCTestCase {
+    @MainActor func testAutoDetectExcludesManualSelectionAndRestoresManualMode() {
+        let workout = WorkoutModel()
+        workout.selectManualExercise(.rdl)
+        XCTAssertEqual(workout.nextExerciseTitle, V2Exercise.rdl.rawValue)
+        workout.exerciseAutoDetect = true
+        XCTAssertEqual(workout.nextExerciseTitle, "Auto detect")
+        XCTAssertEqual(workout.liveExerciseTitle, "Auto detect")
+        workout.selectManualExercise(.lunge)
+        XCTAssertEqual(workout.prescription.exercise, .rdl)
+        workout.exerciseAutoDetect = false
+        workout.selectManualExercise(.lunge)
+        XCTAssertEqual(workout.nextExerciseTitle, V2Exercise.lunge.rawValue)
+    }
+    @MainActor func testRecognitionHeadingNeverFallsBackToPrescription() {
+        var state = StableExerciseState()
+        for status in [StableExerciseState.Status.warmingUp, .gatheringEvidence] {
+            state.status = status
+            XCTAssertEqual(WorkoutModel.recognitionTitle(state), "Detecting…")
+            XCTAssertEqual(WorkoutModel.recognitionTitle(state, completed: true), "Other / not sure")
+        }
+        state.status = .unknown
+        XCTAssertEqual(WorkoutModel.recognitionTitle(state), "Other / not sure")
+        state.status = .unavailable
+        XCTAssertEqual(WorkoutModel.recognitionTitle(state), "Other · signal unavailable")
+        for label in ExerciseLabel.allCases {
+            state.status = .recognized; state.label = label
+            XCTAssertEqual(WorkoutModel.recognitionTitle(state), label.title)
+            XCTAssertEqual(WorkoutModel.recognitionTitle(state, completed: true), label.title)
+        }
+    }
     @MainActor func testNativeRuntimeDoesNotChangeWorkoutAndPersistsCorrection() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -23,6 +53,7 @@ final class ExerciseSuggestionTests: XCTestCase {
             for _ in 0..<1000 { if capture.latestSample != nil { break }; await Task.yield() }
             await workout.start(capture)
             XCTAssertNil(workout.classificationError)
+            if enabled { XCTAssertEqual(workout.liveExerciseTitle, "Detecting…") }
             for index in 0...510 {
                 let t=Double(index)/50, phase=Double.pi*t
                 await workout.ingest(experimentalRawSample(index:UInt64(index),time:t,
@@ -35,6 +66,7 @@ final class ExerciseSuggestionTests: XCTestCase {
                 await workout.confirmExerciseSuggestion(.rdl)
                 XCTAssertEqual(workout.session?.current,before)
                 XCTAssertNil(workout.liveRIR)
+                XCTAssertEqual(workout.liveExerciseTitle, "RDL")
             }
             await workout.endSet()
             for index in 511...545 {
@@ -48,6 +80,12 @@ final class ExerciseSuggestionTests: XCTestCase {
                 XCTAssertNotNil(archive.exerciseAnnotations?.first?.setID)
                 XCTAssertEqual(archive.replay().sets,archive.sets)
                 let draft=try XCTUnwrap(workout.pendingSetReviews.first)
+                XCTAssertEqual(workout.exerciseForReview(draft), .rdl)
+                let completed = try XCTUnwrap(workout.latestSetResult)
+                XCTAssertEqual(workout.exerciseTitle(for: completed), "RDL")
+                workout.exerciseAutoDetect = false
+                XCTAssertEqual(workout.exerciseTitle(for: completed), "RDL")
+                workout.exerciseAutoDetect = true
                 XCTAssertTrue(workout.confirmSet(draft,loadLB:8,reps:draft.detectedReps,repsInReserve:nil))
                 XCTAssertEqual(workout.history.sets.first?.exercise,.rdl)
                 XCTAssertEqual(archive.sets.first?.prescription.exercise,.bicepsCurl)

@@ -210,7 +210,7 @@ struct WorkoutView: View {
             }
         }
         .sheet(item: $reviewingSet) { draft in
-            SetReviewView(draft: workout.reviewedDraft(draft)) { load, reps, rir, exercise in
+            SetReviewView(draft: workout.reviewedDraft(draft), initialExercise: workout.exerciseForReview(draft)) { load, reps, rir, exercise in
                 let saved = workout.confirmSet(draft, loadLB: load, reps: reps, repsInReserve: rir, exercise: exercise)
                 if saved {
                     reviewingSet = nil
@@ -266,7 +266,8 @@ struct WorkoutView: View {
     private var ready: some View {
         VStack(alignment: .leading, spacing: 18) {
             MotionTraceView(samples: capture.traceSamples, streaming: liveSensor != nil)
-            repReadout(reps: 0, prescription: workout.prescription, label: "READY · NEXT SET", pace: nil)
+            repReadout(reps: 0, prescription: workout.prescription, label: "READY · NEXT SET", pace: nil,
+                       confirmedExercise: workout.nextExerciseTitle)
             HStack { exerciseMenu; Spacer(); weightButton }
             RepTargetBar(reps: 0, target: workout.prescription.maximumReps)
             Divider()
@@ -298,7 +299,7 @@ struct WorkoutView: View {
             repReadout(reps: workout.reps, prescription: workout.activePrescription,
                        label: workout.learningMovement ? "LEARNING YOUR RHYTHM" : "COUNTING · SET \(workout.completedSetResults.count + 1)", pace: workout.currentPace,
                        learning: workout.learningMovement || workout.state == .preparing,
-                       confirmedExercise: workout.correctedExercise?.rawValue)
+                       confirmedExercise: workout.liveExerciseTitle)
             RepTargetBar(reps: workout.reps, target: workout.activePrescription.maximumReps)
             HStack(spacing: 8) {
                 liveMetric("SPEED", workout.liveRepSpeedMPS.map { "\($0.formatted(.number.precision(.fractionLength(2)))) m/s" } ?? "—")
@@ -377,7 +378,7 @@ struct WorkoutView: View {
             VStack(alignment: .leading, spacing: 12) {
                 repReadout(reps: workout.latestLoggedSet?.reps ?? set.reps, prescription: set.prescription,
                            label: set.interrupted ? "SET INTERRUPTED" : "SET \(workout.completedSetResults.count) COMPLETE",
-                           pace: set.averageRepDuration, confirmedExercise: workout.correctedExercise?.rawValue)
+                           pace: set.averageRepDuration, confirmedExercise: workout.exerciseTitle(for: set))
                 RepTargetBar(reps: workout.latestLoggedSet?.reps ?? set.reps, target: set.prescription.maximumReps)
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                     liveMetric("AVERAGE SPEED", set.averageSpeedMPS.map {
@@ -542,7 +543,7 @@ struct WorkoutView: View {
                                 .opacity(index == workout.completedSetResults.count - 1 ? 0 : 1)
                         }.frame(width: 11)
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("\(index + 1). \(set.prescription.exercise.rawValue)")
+                            Text("\(index + 1). \(workout.exerciseTitle(for: set))")
                                 .font(.system(size: 19, weight: .medium))
                             Text("\(set.reps) reps · " + (set.prescription.loadLB.map { "\($0.formatted()) lb" } ?? "Weight not entered"))
                                 .font(.system(size: 15)).foregroundStyle(.secondary)
@@ -714,15 +715,14 @@ struct WorkoutView: View {
         Menu {
             ForEach(V2Exercise.allCases) { exercise in
                 Button {
-                    workout.prescription.exercise = exercise
-                    workout.updateNextSet()
+                    workout.selectManualExercise(exercise)
                 } label: {
-                    if exercise == workout.prescription.exercise {
+                    if !workout.usesExerciseAutoDetect && exercise == workout.prescription.exercise {
                         Label(exercise.rawValue, systemImage: "checkmark")
                     } else {
                         Text(exercise.rawValue)
                     }
-                }
+                }.disabled(workout.usesExerciseAutoDetect || workout.isRunning)
             }
             Divider()
             Toggle("Auto detect · Experimental", isOn: $workout.exerciseAutoDetect)
@@ -730,7 +730,7 @@ struct WorkoutView: View {
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: "figure.strengthtraining.traditional")
-                Text(workout.prescription.exercise.rawValue)
+                Text(workout.nextExerciseTitle)
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.caption2.weight(.bold))
@@ -742,7 +742,7 @@ struct WorkoutView: View {
             .background(LiftStyle.blue.opacity(0.08), in: Capsule())
             .overlay(Capsule().stroke(LiftStyle.blue.opacity(0.3), lineWidth: 1))
         }
-        .accessibilityLabel("Exercise, \(workout.prescription.exercise.rawValue)")
+        .accessibilityLabel("Exercise, \(workout.nextExerciseTitle)")
         .accessibilityHint("Opens exercise selection")
         .accessibilityIdentifier("exercise-selector")
     }
@@ -791,9 +791,13 @@ struct WorkoutView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("Workout") {
-                    Picker("Exercise", selection: $workout.prescription.exercise) {
-                        ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
-                    }.disabled(workout.isRunning)
+                    if workout.usesExerciseAutoDetect {
+                        LabeledContent("Exercise", value: "Auto detect")
+                    } else {
+                        Picker("Exercise", selection: $workout.prescription.exercise) {
+                            ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
+                        }.disabled(workout.isRunning)
+                    }
                     NavigationLink {
                         WeightEntryView(loadLB: workout.prescription.loadLB) { load in
                             workout.prescription.loadLB = load
@@ -1023,15 +1027,15 @@ private struct WeightEntryView: View {
 private struct SetReviewView: View {
     let draft: SetReviewDraft
     let confirm: (Double?, Int, Int?, V2Exercise) -> Bool
-    @State private var exercise: V2Exercise
+    @State private var exercise: V2Exercise?
     @Environment(\.dismiss) private var dismiss
     @State private var loadLB: Double?
     @State private var reps: Int
     @State private var repsInReserve: Int?
 
-    init(draft: SetReviewDraft, confirm: @escaping (Double?, Int, Int?, V2Exercise) -> Bool) {
+    init(draft: SetReviewDraft, initialExercise: V2Exercise?, confirm: @escaping (Double?, Int, Int?, V2Exercise) -> Bool) {
         self.draft = draft
-        _exercise = State(initialValue: draft.exercise)
+        _exercise = State(initialValue: initialExercise)
         self.confirm = confirm
         _loadLB = State(initialValue: draft.loadLB)
         _reps = State(initialValue: draft.detectedReps)
@@ -1039,7 +1043,7 @@ private struct SetReviewView: View {
     }
 
     private var valid: Bool {
-        (loadLB.map { $0.isFinite && (0...1000).contains($0) } ?? true) && (1...100).contains(reps)
+        exercise != nil && (loadLB.map { $0.isFinite && (0...1000).contains($0) } ?? true) && (1...100).contains(reps)
     }
 
     var body: some View {
@@ -1047,7 +1051,8 @@ private struct SetReviewView: View {
             Form {
                 Section {
                     Picker("Exercise", selection: $exercise) {
-                        ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
+                        Text("Other / not sure — choose exercise").tag(V2Exercise?.none)
+                        ForEach(V2Exercise.allCases) { Text($0.rawValue).tag(V2Exercise?.some($0)) }
                     }
                     .onChange(of: exercise) { _, _ in repsInReserve = nil }
                     LabeledContent("Detected reps", value: "\(draft.detectedReps)")
@@ -1090,7 +1095,7 @@ private struct SetReviewView: View {
                 }
                 Section {
                     Button("Confirm set") {
-                        if confirm(loadLB, reps, repsInReserve, exercise) { dismiss() }
+                        if let exercise, confirm(loadLB, reps, repsInReserve, exercise) { dismiss() }
                     }.disabled(!valid)
                         .accessibilityIdentifier("confirm-workout-set")
                 }

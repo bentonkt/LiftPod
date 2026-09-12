@@ -307,8 +307,40 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     private var classificationPatternEpoch: Int?
     private var classificationWatchdog: Task<Void, Never>?
     private var exerciseAnnotations: [SetExerciseAnnotation] = []
+    private var resultClassificationCaptures: [UUID: UUID] = [:]
 
     var classificationAvailable: Bool { countingMode == .generic && !automaticSets }
+    var usesExerciseAutoDetect: Bool { exerciseAutoDetect && classificationAvailable }
+    var nextExerciseTitle: String { usesExerciseAutoDetect ? "Auto detect" : prescription.exercise.rawValue }
+    var liveExerciseTitle: String {
+        usesExerciseAutoDetect ? Self.recognitionTitle(exerciseSuggestion) : activePrescription.exercise.rawValue
+    }
+    static func recognitionTitle(_ state: StableExerciseState, completed: Bool = false) -> String {
+        if let label = state.label { return label.title }
+        if completed { return "Other / not sure" }
+        switch state.status {
+        case .idle: return "Auto detect"
+        case .warmingUp, .gatheringEvidence: return "Detecting…"
+        case .unavailable: return "Other · signal unavailable"
+        case .unknown, .recognized: return "Other / not sure"
+        }
+    }
+    func exerciseTitle(for result: WorkoutSetResult) -> String {
+        guard let capture = resultClassificationCaptures[result.id],
+              let annotation = exerciseAnnotations.first(where: { $0.captureID == capture }) else {
+            return result.prescription.exercise.rawValue
+        }
+        return annotation.confirmedLabel?.title ?? Self.recognitionTitle(annotation.state, completed: true)
+    }
+    func selectManualExercise(_ exercise: V2Exercise) {
+        guard !usesExerciseAutoDetect, !isRunning else { return }
+        prescription.exercise = exercise
+        updateNextSet()
+    }
+    func exerciseForReview(_ draft: SetReviewDraft) -> V2Exercise? {
+        guard let annotation = exerciseAnnotations.first(where: { $0.setID == draft.id }) else { return draft.exercise }
+        return annotation.confirmedLabel?.exercise ?? annotation.state.label?.exercise
+    }
     var correctedExercise: V2Exercise? {
         if let confirmed = exerciseAnnotations.first(where: { $0.captureID == classificationCaptureID })?.confirmedLabel {
             return confirmed.exercise
@@ -321,6 +353,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
     private func beginClassification() async {
         await freezeClassification()
+        classificationCaptureID = nil
         exerciseSuggestion = .init(); classificationError = nil; classificationPatternEpoch = nil
         guard exerciseAutoDetect, classificationAvailable else { return }
         let id = UUID(); classificationCaptureID = id
@@ -389,7 +422,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
     func reviewedDraft(_ draft: SetReviewDraft) -> SetReviewDraft {
         var value = draft; value.exercise = reviewedExercise(for: draft)
-        if value.exercise != draft.exercise { value.automaticRIR = nil }
+        if value.exercise != draft.exercise || exerciseAnnotations.contains(where: { $0.setID == draft.id && $0.confirmedLabel == nil }) { value.automaticRIR = nil }
         return value
     }
     @Published var countingMode: RepCountingMode = .generic
@@ -450,6 +483,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     }
     var canAnalyzeLatestSet: Bool {
         !isRunning && !aiLoading && !automaticRecoveryProvisional &&
+        !exerciseAnnotations.contains(where: { $0.setID == completedSets.last?.id && $0.confirmedLabel == nil }) &&
         latestSetResult.map { !$0.interrupted && $0.reps > 0 && $0.id == aiInputSetID } == true
     }
     private func invalidateLatestAIAdvice() {
@@ -574,6 +608,10 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     @discardableResult
     func confirmSet(_ draft: SetReviewDraft, loadLB: Double?, reps: Int, repsInReserve: Int?, exercise: V2Exercise? = nil) -> Bool {
+        if exercise == nil, exerciseAnnotations.contains(where: { $0.setID == draft.id && $0.confirmedLabel == nil }) {
+            error = "Choose or confirm an exercise before saving this set."
+            return false
+        }
         var reviewed = reviewedDraft(draft)
         reviewed.exercise = exercise ?? reviewed.exercise
         if reviewed.exercise != draft.exercise { reviewed.automaticRIR = nil }
@@ -945,6 +983,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         let oldClassifier = classifier
         Task { await oldClassifier?.finish(now: ProcessInfo.processInfo.systemUptime) }
         classifier = nil; classificationCaptureID = nil; exerciseSuggestion = .init(); exerciseAnnotations = []
+        resultClassificationCaptures = [:]
         repSpeedSeries = RepSpeedSeries()
         aiRequestID = UUID(); aiLoading = false; aiError = nil; aiInput = nil
         aiInputSetID = nil; automaticAIInputs = [:]; aiAdviceBySet = [:]; aiExerciseBySet = [:]
@@ -1242,6 +1281,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             averageRepDuration: averageDuration, movementDuration: movementDuration,
             interrupted: state == .interrupted, finishedAt: Date(),
             slowdownPercent: observedSpeedDegradation(for: accepted), coaching: coaching)
+        if let capture = classificationCaptureID { resultClassificationCaptures[completed.id] = capture }
         let acceptedIDs = Set(accepted.map(\.id))
         let availableGenericMetrics = genericMetrics.values.filter {
             acceptedIDs.contains($0.id) && $0.status == .available
