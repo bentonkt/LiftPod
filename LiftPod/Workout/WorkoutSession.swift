@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 struct WorkoutPolicy: Codable, Equatable {
@@ -118,5 +119,142 @@ struct WorkoutSessionArchive: Codable {
         var reducer = WorkoutSessionReducer(prescription: initialPrescription, policy: policy)
         for input in inputs { reducer.apply(input) }
         return reducer
+    }
+}
+
+struct SetReviewDraft: Identifiable, Equatable {
+    let id: String
+    let sessionID: UUID
+    let exercise: V2Exercise
+    let detectedReps: Int
+    let averageRepDuration: Double?
+    let endedAt: Date
+    var loadLB: Double
+
+    init(sessionID: UUID, set: SessionSet, endedAt: Date = Date()) {
+        id = set.id
+        self.sessionID = sessionID
+        exercise = set.prescription.exercise
+        detectedReps = set.reps.count
+        averageRepDuration = set.reps.isEmpty ? nil : set.averageDuration
+        self.endedAt = endedAt
+        loadLB = set.prescription.loadLB
+    }
+}
+
+struct LoggedWorkoutSet: Codable, Identifiable, Equatable {
+    let id: UUID
+    let sessionID: UUID
+    let sourceSetID: String
+    let exercise: V2Exercise
+    let loadLB: Double
+    let reps: Int
+    let repsInReserve: Int?
+    let averageRepDuration: Double?
+    let performedAt: Date
+
+    var volumeLB: Double { loadLB * Double(reps) }
+}
+
+struct WorkoutDay: Identifiable, Equatable {
+    let date: Date
+    let sets: [LoggedWorkoutSet]
+    var id: Date { date }
+    var totalVolumeLB: Double { sets.map(\.volumeLB).reduce(0, +) }
+}
+
+struct LoadPrediction: Equatable {
+    let loadLB: Double
+    let estimatedOneRepMaxLB: Double
+    let source: LoggedWorkoutSet
+}
+
+/// Stores only user-confirmed sets. Detector output remains a review draft until
+/// the user verifies the load, rep count, and optional repetitions in reserve.
+@MainActor
+final class WorkoutHistoryStore: ObservableObject {
+    @Published private(set) var sets: [LoggedWorkoutSet] = []
+    @Published private(set) var error: String?
+
+    private let fileURL: URL
+    private let calendar: Calendar
+
+    init(fileURL: URL? = nil, calendar: Calendar = .current) {
+        self.calendar = calendar
+        self.fileURL = fileURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("WorkoutHistory/workouts.json")
+        load()
+    }
+
+    var days: [WorkoutDay] {
+        Dictionary(grouping: sets) { calendar.startOfDay(for: $0.performedAt) }
+            .map { WorkoutDay(date: $0.key, sets: $0.value.sorted { $0.performedAt < $1.performedAt }) }
+            .sorted { $0.date > $1.date }
+    }
+
+    func contains(sessionID: UUID, sourceSetID: String) -> Bool {
+        sets.contains { $0.sessionID == sessionID && $0.sourceSetID == sourceSetID }
+    }
+
+    @discardableResult
+    func confirm(_ draft: SetReviewDraft, loadLB: Double, reps: Int, repsInReserve: Int?) -> Bool {
+        guard loadLB.isFinite, (0...1000).contains(loadLB), (1...100).contains(reps),
+              repsInReserve.map({ (0...10).contains($0) }) ?? true else {
+            error = "Enter a weight from 0 to 1,000 lb, 1–100 reps, and 0–10 RIR."
+            return false
+        }
+        guard !contains(sessionID: draft.sessionID, sourceSetID: draft.id) else { return true }
+        let entry = LoggedWorkoutSet(id: UUID(), sessionID: draft.sessionID, sourceSetID: draft.id,
+            exercise: draft.exercise, loadLB: loadLB, reps: reps, repsInReserve: repsInReserve,
+            averageRepDuration: draft.averageRepDuration, performedAt: draft.endedAt)
+        sets.append(entry)
+        sets.sort { $0.performedAt > $1.performedAt }
+        guard save() else {
+            sets.removeAll { $0.id == entry.id }
+            return false
+        }
+        return true
+    }
+
+    /// A transparent first-pass estimate for future personalization. Reps plus
+    /// RIR approximate reps-to-failure; Epley's relationship estimates 1RM, then
+    /// the equation is inverted for the requested rep/RIR target and rounded to
+    /// equipment increments. Treat this as a suggestion, never an automatic edit.
+    func prediction(for exercise: V2Exercise, targetReps: Int, targetRIR: Int,
+                    incrementLB: Double = 5) -> LoadPrediction? {
+        guard let source = sets.first(where: { $0.exercise == exercise }),
+              let sourceRIR = source.repsInReserve, source.loadLB > 0,
+              (1...30).contains(source.reps + sourceRIR),
+              (1...30).contains(targetReps + targetRIR), incrementLB > 0 else { return nil }
+        let estimatedMax = source.loadLB * (1 + Double(source.reps + sourceRIR) / 30)
+        let raw = estimatedMax / (1 + Double(targetReps + targetRIR) / 30)
+        return LoadPrediction(loadLB: (raw / incrementLB).rounded() * incrementLB,
+                              estimatedOneRepMaxLB: estimatedMax, source: source)
+    }
+
+    private func load() {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            sets = try decoder.decode([LoggedWorkoutSet].self, from: Data(contentsOf: fileURL))
+                .sorted { $0.performedAt > $1.performedAt }
+        } catch { self.error = "Could not load workout history: \(error.localizedDescription)" }
+    }
+
+    private func save() -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(sets).write(to: fileURL, options: .atomic)
+            error = nil
+            return true
+        } catch {
+            self.error = "Could not save workout history: \(error.localizedDescription)"
+            return false
+        }
     }
 }

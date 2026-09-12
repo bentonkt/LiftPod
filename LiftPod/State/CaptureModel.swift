@@ -37,6 +37,15 @@ final class CaptureModel: ObservableObject {
         motionAvailable = provider.isMotionAvailable
     }
 
+    /// Connection and source side are separate: iOS can stream the left AirPod
+    /// even when both earbuds are paired. Expire a stopped stream explicitly.
+    func liveSensor(now: Double = ProcessInfo.processInfo.systemUptime) -> HeadphoneSensorLocation? {
+        guard monitoringActive, motionUpdatesActive, let sample = latestSample else { return nil }
+        let age = now - sample.receiptUptime
+        guard age >= 0, age < 0.5 else { return nil }
+        return sample.sensorLocation
+    }
+
     func startMotion() {
         guard !monitoringActive else { return }
         latestError = nil

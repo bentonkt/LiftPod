@@ -44,7 +44,8 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let provider = MockMotionProvider()
         let capture = CaptureModel(provider: provider, recorder: MockRecorder())
-        let model = WorkoutModel(makeRecorder: { V2SessionRecorder(directory: directory) })
+        let model = WorkoutModel(makeRecorder: { V2SessionRecorder(directory: directory) },
+                                 historyFileURL: directory.appendingPathComponent("history.json"))
         capture.startMotion()
         provider.emit(.sample(experimentalRawSample(index: 0, time: 0,
             receiptTime: ProcessInfo.processInfo.systemUptime)))
@@ -53,17 +54,30 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         await model.start(capture)
         XCTAssertEqual(model.state, .preparing)
         model.prescription.loadLB = 40
-        var samples = Array(repeating: -0.5, count: 180)
+        // A physical rotation with unit gravity and matching angular velocity
+        // exercises the default adaptive V6 path, not the legacy scalar detector.
+        var samples: [(Double, Double)] = Array(repeating: (0, 0), count: 180)
         for _ in 0..<3 {
-            samples += v2CurlSignals(bottom: -0.5, top: 0.6, returned: -0.5)
-            samples += Array(repeating: -0.5, count: 30)
+            samples += (1...100).map { (Double($0) * 0.024, 1.2) }
+            samples += (1...100).map { (2.4 - Double($0) * 0.024, -1.2) }
+            samples += Array(repeating: (0, 0), count: 30)
         }
-        for (index, signal) in samples.enumerated() { await model.ingest(v2Raw(index, signal: signal)) }
+        func raw(_ index: Int, angle: Double = 0, rate: Double = 0) -> RawMotionSample {
+            experimentalRawSample(index: UInt64(index), time: Double(index) * 0.02,
+                gravity: .init(x: 0, y: sin(angle), z: cos(angle)),
+                rotation: .init(x: rate, y: 0, z: 0))
+        }
+        for (index, sample) in samples.enumerated() {
+            await model.ingest(raw(index, angle: sample.0, rate: sample.1))
+        }
         XCTAssertEqual(model.state, .active)
         XCTAssertGreaterThan(model.reps, 0)
+        XCTAssertNotNil(model.currentPace)
+        XCTAssertGreaterThan(model.activeTime, 0)
+        XCTAssertLessThan(model.activeTime, model.elapsedTime)
         await model.end()
         XCTAssertEqual(model.state, .finalizing)
-        for index in samples.count..<(samples.count + 25) { await model.ingest(v2Raw(index)) }
+        for index in samples.count..<(samples.count + 25) { await model.ingest(raw(index)) }
         XCTAssertEqual(model.state, .complete)
         let result = try XCTUnwrap(model.result)
         XCTAssertEqual(result.prescription.loadLB, 25)
@@ -71,7 +85,26 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         let saved = try JSONDecoder().decode(WorkoutSetResult.self, from: Data(contentsOf: XCTUnwrap(model.summaryURL)))
         XCTAssertEqual(saved.reps, result.reps)
         XCTAssertEqual(saved.prescription, result.prescription)
+        let profileURL = try XCTUnwrap(model.summaryURL).deletingLastPathComponent()
+            .appendingPathComponent("experimental-v6-profile.json")
+        let recordedProfile = try JSONDecoder().decode(V2DSPProfile.self, from: Data(contentsOf: profileURL))
+        XCTAssertEqual(recordedProfile.profileID, V2DSPProfile.adaptiveCurlV6.profileID)
+        XCTAssertEqual(recordedProfile.identity.algorithm, .adaptiveAxis)
+        XCTAssertEqual(model.pendingSetReviews.count, model.completedSets.count)
+        let draft = try XCTUnwrap(model.pendingSetReviews.first)
+        XCTAssertTrue(model.confirmSet(draft, loadLB: 30, reps: 12, repsInReserve: 2))
+        XCTAssertEqual(model.history.sets.first?.loadLB, 30)
+        XCTAssertEqual(model.history.sets.first?.reps, 12)
+        XCTAssertEqual(model.history.sets.first?.repsInReserve, 2)
         await capture.stopMotion()
+    }
+
+    func testDeveloperLabDefaultsToAdaptiveV6() {
+        let model = ExperimentalV2Model()
+        XCTAssertEqual(model.selectedAlgorithm, .adaptiveAxis)
+        XCTAssertEqual(model.profile?.profileID, V2DSPProfile.adaptiveCurlV6.profileID)
+        model.selectedExercise = .bicepsCurl
+        XCTAssertEqual(model.profile?.identity.algorithm, .adaptiveAxis)
     }
 
     func testSilentStreamInterruptionEndsPreparation() async {
@@ -107,6 +140,26 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertEqual(consumer.interruptions, 1)
     }
 
+    func testLiveMotionDistinguishesSideAndExpiresWithoutCallbacks() async {
+        let provider = MockMotionProvider()
+        let capture = CaptureModel(provider: provider, recorder: MockRecorder())
+        let model = WorkoutModel()
+        capture.startMotion()
+        let receipt = ProcessInfo.processInfo.systemUptime
+        provider.emit(.sample(experimentalRawSample(index: 0, time: 0, receiptTime: receipt)))
+        for _ in 0..<1000 { if capture.latestSample != nil { break }; await Task.yield() }
+        XCTAssertEqual(capture.liveSensor(now: receipt + 0.3), .rightHeadphone)
+        XCTAssertTrue(model.signalReady(capture, now: receipt + 0.3))
+        XCTAssertNil(capture.liveSensor(now: receipt + 0.5))
+        XCTAssertNil(capture.liveSensor(now: receipt - 0.1))
+        provider.emit(.sample(makeSample(index: 1, receiptUptime: receipt + 0.1)))
+        for _ in 0..<1000 { if capture.latestSample?.index == 1 { break }; await Task.yield() }
+        XCTAssertEqual(capture.liveSensor(now: receipt + 0.2), .leftHeadphone)
+        XCTAssertFalse(model.signalReady(capture, now: receipt + 0.2))
+        await capture.stopMotion()
+        XCTAssertNil(capture.liveSensor(now: receipt + 0.2))
+    }
+
     func testStartRequiresLiveRightSideAndConfirmedMount() async {
         let provider = MockMotionProvider()
         let capture = CaptureModel(provider: provider, recorder: MockRecorder())
@@ -118,6 +171,54 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertFalse(model.canStart(capture), "A live left AirPod must not authorize a right-side profile")
         XCTAssertFalse(model.signalReady(capture, now: ProcessInfo.processInfo.systemUptime + 1))
         await capture.stopMotion()
+    }
+}
+
+@MainActor
+final class WorkoutHistoryTests: XCTestCase {
+    func testConfirmedSetsPersistByDayAndDuplicateSourceIsIgnored() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("workouts.json")
+        let store = WorkoutHistoryStore(fileURL: file)
+        let set = SessionSet(id: "set-1", prescription: .init(),
+                             reps: [.init(id: "rep-1", start: 0, end: 2)])
+        let draft = SetReviewDraft(sessionID: UUID(), set: set,
+                                   endedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertTrue(store.confirm(draft, loadLB: 30, reps: 12, repsInReserve: 2))
+        XCTAssertTrue(store.confirm(draft, loadLB: 35, reps: 8, repsInReserve: 1))
+        XCTAssertEqual(store.sets.count, 1)
+        XCTAssertEqual(store.days.count, 1)
+        XCTAssertEqual(store.days[0].totalVolumeLB, 360)
+
+        let restored = WorkoutHistoryStore(fileURL: file)
+        XCTAssertEqual(restored.sets, store.sets)
+    }
+
+    func testPredictionUsesConfirmedRepsAndRIRAndRoundsToEquipmentIncrement() {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let store = WorkoutHistoryStore(fileURL: file)
+        let set = SessionSet(id: "set-1", prescription: .init(),
+                             reps: [.init(id: "rep-1", start: 0, end: 2)])
+        let draft = SetReviewDraft(sessionID: UUID(), set: set)
+        XCTAssertTrue(store.confirm(draft, loadLB: 30, reps: 12, repsInReserve: 2))
+        let prediction = store.prediction(for: .bicepsCurl, targetReps: 8, targetRIR: 2)
+        XCTAssertEqual(prediction?.estimatedOneRepMaxLB ?? 0, 44, accuracy: 0.001)
+        XCTAssertEqual(prediction?.loadLB, 35)
+    }
+
+    func testPredictionRequiresRIRRatherThanInventingEffort() {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let store = WorkoutHistoryStore(fileURL: file)
+        let set = SessionSet(id: "set-1", prescription: .init(),
+                             reps: [.init(id: "rep-1", start: 0, end: 2)])
+        XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: UUID(), set: set),
+                                    loadLB: 30, reps: 12, repsInReserve: nil))
+        XCTAssertNil(store.prediction(for: .bicepsCurl, targetReps: 8, targetRIR: 2))
     }
 }
 

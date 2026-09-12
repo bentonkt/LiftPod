@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: CaptureModel
+    var toggleInterface: (() -> Void)? = nil
     @StateObject private var offlineModel = OfflinePreprocessingModel()
     @State private var showingRawCSVImporter = false
 
@@ -17,6 +18,16 @@ struct ContentView: View {
                 guidanceSection
             }
             .navigationTitle("AirPods Motion")
+            .toolbar {
+                if let toggleInterface {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("liftpod", action: toggleInterface)
+                            .font(.system(size: 15, weight: .semibold))
+                            .accessibilityLabel("Switch to workout interface")
+                            .accessibilityIdentifier("interface-toggle")
+                    }
+                }
+            }
             .fileImporter(
                 isPresented: $showingRawCSVImporter,
                 allowedContentTypes: [.commaSeparatedText, .plainText]

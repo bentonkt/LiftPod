@@ -5,12 +5,12 @@ import Foundation
 final class ExperimentalV2Model: ObservableObject {
     @Published var selectedExercise: V2Exercise = .bicepsCurl { didSet { refreshProfile() } }
     @Published var selectedSide: ExperimentalSensorSide = .right { didSet { refreshProfile() } }
-    @Published var selectedAlgorithm: V6Algorithm = .qualifiedLocalCycle { didSet { refreshProfile() } }
+    @Published var selectedAlgorithm: V6Algorithm = .adaptiveAxis { didSet { refreshProfile() } }
     @Published var setupConfirmed = false
     @Published var airPodsModelLabel = ""
     @Published var observedCount = ""
     @Published var notes = ""
-    @Published private(set) var profile: V2DSPProfile? = .bundledCurl
+    @Published private(set) var profile: V2DSPProfile? = .adaptiveCurlV6
     @Published private(set) var snapshot = V2ProcessorSnapshot(
         ingestSequence: -1, setState: .idle, quality: .warmingUp, detectorPhase: .waitingForBottom,
         committedCount: 0, reference: nil, filteredSignal: nil, landmarks: .init(), recentEvents: []

@@ -70,26 +70,39 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     @Published private(set) var session: WorkoutSessionReducer?
     @Published private(set) var sessionURL: URL?
+    @Published private(set) var pendingSetReviews: [SetReviewDraft] = []
+    let history: WorkoutHistoryStore
     private var sessionID = UUID()
     private let sessionDirectory: URL
     private let engine = V2SetEngine()
     private let makeRecorder: () -> any V2RecordingSink
     private var frozenPrescription: WorkoutPrescription?
     private var ledger = WorkoutRepLedger()
+    private var firstSourceTime: Double?
     private var latestSourceTime: Double?
     private var startedAtUptime: Double = 0
     private var lastReceipt: Double?
     private var finishing = false
 
     init(makeRecorder: @escaping () -> any V2RecordingSink = { V2SessionRecorder() },
-         sessionDirectory: URL? = nil) {
+         sessionDirectory: URL? = nil, historyFileURL: URL? = nil) {
         self.makeRecorder = makeRecorder
         self.sessionDirectory = sessionDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Workouts")
+        history = WorkoutHistoryStore(fileURL: historyFileURL)
     }
 
     var completedSets: [SessionSet] { session?.sets ?? [] }
     var restStart: Double? { session?.current == nil ? session?.sets.last?.end : nil }
     var sourceTime: Double { latestSourceTime ?? 0 }
+    var elapsedTime: Double { max(0, sourceTime - (firstSourceTime ?? sourceTime)) }
+    var activeTime: Double {
+        let recorded = completedSets.flatMap(\.reps).map(\.duration).reduce(0, +)
+        return recorded + (session?.current?.reps.map(\.duration).reduce(0, +) ?? 0)
+    }
+    var currentPace: Double? { session?.current?.averageDuration }
+    var timeoutRemaining: Double? {
+        session?.current.map { max(0, 12 - (sourceTime - $0.end)) }
+    }
 
     func updateNextSet() {
         guard prescription.isValid, supportedExercise else { error = "Choose an available exercise and valid target."; return }
@@ -98,19 +111,36 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func endSet() {
         guard state == .active, let latestSourceTime else { return }
+        let previousSetCount = session?.sets.count ?? 0
         session?.apply(.closeSet(latestSourceTime))
+        enqueueSetReviews(after: previousSetCount)
         reps = 0
         saveSession(interrupted: false, recordingDirectory: nil)
     }
 
+    @discardableResult
+    func confirmSet(_ draft: SetReviewDraft, loadLB: Double, reps: Int, repsInReserve: Int?) -> Bool {
+        guard history.confirm(draft, loadLB: loadLB, reps: reps, repsInReserve: repsInReserve) else {
+            error = history.error
+            return false
+        }
+        pendingSetReviews.removeAll { $0.sessionID == draft.sessionID && $0.id == draft.id }
+        error = nil
+        return true
+    }
+
+    func loadPrediction(targetReps: Int? = nil, targetRIR: Int = 2) -> LoadPrediction? {
+        history.prediction(for: prescription.exercise,
+                           targetReps: targetReps ?? (prescription.minimumReps + prescription.maximumReps) / 2,
+                           targetRIR: targetRIR)
+    }
+
     var isRunning: Bool { [.preparing, .active, .finalizing].contains(state) || busy }
-    var activePrescription: WorkoutPrescription { frozenPrescription ?? prescription }
+    var activePrescription: WorkoutPrescription { session?.current?.prescription ?? session?.prescription ?? frozenPrescription ?? prescription }
     var supportedExercise: Bool { prescription.exercise == .bicepsCurl }
 
     func signalReady(_ capture: CaptureModel, now: Double = ProcessInfo.processInfo.systemUptime) -> Bool {
-        guard capture.motionUpdatesActive, let sample = capture.latestSample else { return false }
-        let age = now - sample.receiptUptime
-        return age >= 0 && age < 0.25 && sample.sensorLocation == .rightHeadphone
+        capture.liveSensor(now: now) == .rightHeadphone
     }
 
     func canStart(_ capture: CaptureModel) -> Bool {
@@ -123,7 +153,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         busy = true
         defer { busy = false }
         error = nil; result = nil; summaryURL = nil
-        ledger = WorkoutRepLedger(); reps = 0; latestSourceTime = nil; lastReceipt = nil
+        ledger = WorkoutRepLedger(); reps = 0; firstSourceTime = nil; latestSourceTime = nil; lastReceipt = nil
         frozenPrescription = prescription
         sessionID = UUID()
         session = WorkoutSessionReducer(prescription: prescription)
@@ -131,7 +161,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         startedAtUptime = ProcessInfo.processInfo.systemUptime
         capture.workoutConsumer = self
         do {
-            try await engine.start(profile: .bundledCurl, recorder: makeRecorder(),
+            try await engine.start(profile: .adaptiveCurlV6, recorder: makeRecorder(),
                                    motionActive: capture.motionUpdatesActive, sideVerified: true,
                                    noOtherRecording: !capture.recordingActive, setupConfirmed: mountConfirmed)
             await refresh()
@@ -140,6 +170,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
 
     func ingest(_ sample: RawMotionSample) async {
         guard [.preparing, .active, .finalizing].contains(state) else { return }
+        firstSourceTime = firstSourceTime ?? sample.sourceTimestamp
         lastReceipt = sample.receiptUptime
         latestSourceTime = sample.sourceTimestamp
         await engine.ingest(sample)
@@ -187,6 +218,7 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
         let previousSetCount = session?.sets.count ?? 0
         for event in newEvents { session?.apply(.rep(SessionRep(event))) }
         if let latestSourceTime { session?.apply(.clock(latestSourceTime)) }
+        enqueueSetReviews(after: previousSetCount)
         if (session?.sets.count ?? 0) != previousSetCount { saveSession(interrupted: false, recordingDirectory: nil) }
         // The detector clears its event buffer when interrupted; retain confirmed reps.
         reps = session?.current?.reps.count ?? 0
@@ -195,7 +227,9 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
               let frozenPrescription else { return }
         finishing = true
         defer { finishing = false }
+        let setCountBeforeEnd = session?.sets.count ?? 0
         session?.apply(.end(latestSourceTime ?? 0, interrupted: state == .interrupted))
+        enqueueSetReviews(after: setCountBeforeEnd)
         let accepted = session?.sets.flatMap(\.reps) ?? []
         reps = accepted.count
         let averageDuration = accepted.isEmpty ? nil : accepted.map(\.duration).reduce(0, +) / Double(accepted.count)
@@ -234,6 +268,15 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
             try encoder.encode(archive).write(to: url, options: .atomic)
             sessionURL = url
         } catch { self.error = "Could not save session: \(error.localizedDescription)" }
+    }
+
+    private func enqueueSetReviews(after previousSetCount: Int) {
+        guard let session, session.sets.count > previousSetCount else { return }
+        for set in session.sets.dropFirst(previousSetCount) {
+            let duplicate = pendingSetReviews.contains { $0.sessionID == sessionID && $0.id == set.id }
+            guard !duplicate, !history.contains(sessionID: sessionID, sourceSetID: set.id) else { continue }
+            pendingSetReviews.append(SetReviewDraft(sessionID: sessionID, set: set))
+        }
     }
 
 }

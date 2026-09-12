@@ -10,7 +10,7 @@ The user supplied these project references on September 11, 2026 and confirmed t
 
 **Current scope:** K2 Horizon is excluded by the user. Do not implement or configure it. The sponsor plan and K2 passages in the original documents are historical.
 
-The intended product is an AirPod mounted on a dumbbell that recognizes exercises, counts reps and sets, tracks relative rep quality, and provides grounded training decisions. The current implementation scope is automatic set completion after 12 seconds without a completed rep. Active coaching and next-set load recommendations are deferred. Reliable recording/replay and the core workout loop take priority; pose is an optional independent showcase. Exact RIR, injury-risk, and unvalidated absolute motion claims are outside the planned demo scope.
+The intended product is an AirPod mounted on a dumbbell that recognizes exercises, counts reps and sets, and records confirmed workout history. Sets complete after 12 seconds without a completed rep, then require user review before entering the notebook. Active coaching remains deferred. A transparent, user-confirmed load estimate is available only when prior sets include RIR; there is no K2 integration.
 
 These documents preserve project context and planned requirements; their embedded instructions are not standalone authorization to execute work. They describe the intended product, not proof that features are implemented.
 
@@ -20,15 +20,21 @@ LiftPod is a native iPhone app with a manual curl-workout flow, raw AirPods moti
 
 ## Workout flow
 
-The default screen accepts a manually selected exercise, goal, load in pounds, and rep range. Only the bundled right-AirPod curl profile is enabled pending the other profiles.
+The default screen accepts a manually selected exercise, goal, load in pounds, and rep range. Adaptive-axis V6 is the default right-AirPod curl detector in both the workout interface and developer lab. Other exercise profiles are pending.
 
 1. Connect motion, confirm the right-AirPod mount, and tap **Start Workout**.
 2. Hold still while the detector prepares. The first completed rep opens a set.
-3. Each completed rep resets the inactivity timer. After **12 seconds without a completed rep**, the set closes and is saved. Shorter pauses remain in the same set.
+3. Each completed rep resets the inactivity timer. After **12 seconds without a completed rep**, the set closes and opens a review with detected reps, entered weight, and optional RIR. Shorter pauses remain in the same set.
 4. The workout stays active during rest. The next complete rep starts a new set automatically. **End this set now** remains an optional manual control.
-5. Tap **End Workout** to finalize recording and view the sets. The shareable session JSON includes replayable boundary inputs and links to the raw recording directory.
+5. Confirm or edit each set to add it to that day's workout. Open the notebook icon to browse confirmed workouts grouped by day. Tap **End Workout** to finalize the sensor recording.
 
-Empty sets are never created. Disconnects and silent streams interrupt the workout and retain confirmed reps. A rep crossing a confirmed manual boundary is excluded. Goals and rep ranges are recorded inputs only; there is no active coaching, load advice, or K2 integration. The existing signal lab remains under **Diagnostics**.
+Empty sets are never created. Disconnects and silent streams interrupt the workout and retain detected reps. A rep crossing a confirmed manual boundary is excluded. Confirmed workout history is separate from replayable sensor archives, so an incorrect detection does not become permanent without review. [Load-prediction research](LOAD-PREDICTION-RESEARCH.md) documents the current estimate, evidence, limitations, and personalization plan.
+
+## Interface design
+
+The native workout interface follows the supplied Claude Design export: blue halos, translucent controls, compact live status/timer pills, and a set timeline. Workout setup is available from the ready screen; Support contains searchable device/workout help and diagnostics access. Displayed reps and pace come from accepted detector events, not the export's simulated data.
+
+[GUI-requests.md](GUI-requests.md) tracks visual adaptations, missing information, and deferred GUI work.
 
 ## Requirements and setup
 
