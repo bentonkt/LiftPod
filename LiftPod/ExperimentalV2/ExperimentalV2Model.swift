@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class ExperimentalV2Model: ObservableObject {
+    @Published var countingMode: RepCountingMode = .exercise { didSet { refreshProfile() } }
     @Published var selectedExercise: V2Exercise = .bicepsCurl { didSet { refreshProfile() } }
     @Published var selectedSide: ExperimentalSensorSide = .right { didSet { refreshProfile() } }
     @Published var selectedAlgorithm: V6Algorithm = .adaptiveAxis {
@@ -37,6 +38,8 @@ final class ExperimentalV2Model: ObservableObject {
     private static let devicePathKey = "repLab.cyclicDevicePathMetricsEnabled"
     private let preferences: UserDefaults
     private let engine = V2SetEngine()
+    private let genericSession = GenericRepSession()
+    private var runningGeneric = false
     private var recorder: V2SessionRecorder?
     private var latestSourceTimestamp = 0.0
     private var latestReceiptUptime = 0.0
@@ -54,16 +57,28 @@ final class ExperimentalV2Model: ObservableObject {
     }
 
     var unavailableMessage: String? {
-        selectedExercise == .bicepsCurl && selectedSide == .right ? nil :
+        if countingMode == .generic { return nil }
+        return selectedExercise == .bicepsCurl && selectedSide == .right ? nil :
             "This exercise and setup require calibration or an imported eligible Experimental V6 profile."
     }
 
     func canStart(motionActive: Bool, sideVerified: Bool, otherRecordingActive: Bool) -> Bool {
-        motionActive && sideVerified && !otherRecordingActive && setupConfirmed && profile != nil &&
+        motionActive && sideVerified && !otherRecordingActive && setupConfirmed && (countingMode == .generic || profile != nil) &&
             (snapshot.setState == .idle || snapshot.setState == .complete || snapshot.setState == .interrupted)
     }
 
     func startSet(motionActive: Bool, sideVerified: Bool, otherRecordingActive: Bool) async {
+        if countingMode == .generic {
+            guard canStart(motionActive: motionActive, sideVerified: sideVerified, otherRecordingActive: otherRecordingActive) else { return }
+            do {
+                try await genericSession.start(side: selectedSide, metricsEnabled: devicePathMetricsEnabled)
+                runningGeneric = true
+                latestError = nil; exportURLs = nil; reviewStatus = nil
+                replayTask?.cancel(); replayTask = nil; verifyingDirectory = nil; replayStatus = "Not run"
+                recordingStatus = "Recording"; await refresh(force: true)
+            } catch { latestError = error.localizedDescription }
+            return
+        }
         guard let profile else { latestError = unavailableMessage; return }
         let recorder = V2SessionRecorder()
         do {
@@ -72,6 +87,7 @@ final class ExperimentalV2Model: ObservableObject {
                                    setupConfirmed: setupConfirmed,
                                    metricsConfiguration: devicePathMetricsEnabled ? .cyclicDevicePath3D :
                                     (continuousMetricsEnabled ? .continuousV2 : .init()))
+            runningGeneric = false
             self.recorder = recorder; latestError = nil; exportURLs = nil; reviewStatus = nil
             replayTask?.cancel(); replayTask = nil; verifyingDirectory = nil; replayStatus = "Not run"
             recordingStatus = "Recording"; await refresh(force: true)
@@ -80,6 +96,17 @@ final class ExperimentalV2Model: ObservableObject {
 
     func ingest(_ sample: RawMotionSample) async {
         latestSourceTimestamp = sample.sourceTimestamp; latestReceiptUptime = sample.receiptUptime
+        if runningGeneric {
+            guard [.active,.finalizing].contains(snapshot.setState) else { return }
+            do { try await genericSession.apply(.init(kind: .sample, raw: RawMotionEvent(sample))) }
+            catch { latestError = error.localizedDescription }
+            if let next = await genericSession.snapshot,
+               next.setState != snapshot.setState || next.committedCount != snapshot.committedCount ||
+                sample.sourceTimestamp-lastPresentationSourceTimestamp >= 0.09 {
+                await apply(next); lastPresentationSourceTimestamp = sample.sourceTimestamp
+            }
+            return
+        }
         await engine.ingest(sample)
         let next = await engine.snapshot
         let finalizedCount = next.metrics?.reps.filter { $0.status != .pending }.count ?? 0
@@ -92,11 +119,23 @@ final class ExperimentalV2Model: ObservableObject {
     }
 
     func endSet() async {
+        if runningGeneric {
+            do { try await genericSession.apply(.init(kind: .end, timestamp: latestSourceTimestamp)); await refresh(force: true) }
+            catch { latestError = error.localizedDescription }
+            return
+        }
         do { try await engine.requestEnd(at: latestSourceTimestamp); await refresh(force: true) }
         catch { latestError = error.localizedDescription }
     }
 
     func sync() async {
+        if runningGeneric {
+            do { try await genericSession.apply(.init(kind: .marker, marker: .init(name: "SYNC",
+                estimatedSessionSourceTime: latestSourceTimestamp, receiptUptime: latestReceiptUptime,
+                ingestSequence: snapshot.ingestSequence))) }
+            catch { latestError = error.localizedDescription }
+            return
+        }
         do {
             try await engine.addSyncMarker(name: "SYNC", sourceTimestamp: latestSourceTimestamp,
                                            receiptUptime: latestReceiptUptime)
@@ -104,10 +143,16 @@ final class ExperimentalV2Model: ObservableObject {
     }
 
     func motionUnavailable() async {
+        if runningGeneric {
+            try? await genericSession.apply(.init(kind: .interrupt, interruption: .disconnect)); await refresh(force: true); return
+        }
         await engine.motionDisconnected(); await refresh(force: true)
     }
 
     func applicationBackgrounded() async {
+        if runningGeneric {
+            try? await genericSession.apply(.init(kind: .interrupt, interruption: .appBackgrounding)); await refresh(force: true); return
+        }
         await engine.applicationBackgrounded(); await refresh(force: true)
     }
 
@@ -125,22 +170,29 @@ final class ExperimentalV2Model: ObservableObject {
     }
 
     private func refresh(force: Bool) async {
+        if runningGeneric {
+            if force, let next = await genericSession.snapshot { await apply(next) }
+            return
+        }
         let next = await engine.snapshot
         if force { await apply(next) }
     }
 
     private func apply(_ next: V2ProcessorSnapshot) async {
         snapshot = next
-        exportURLs = await engine.completedBundle
+        if runningGeneric { exportURLs = await genericSession.completedBundle }
+        else { exportURLs = await engine.completedBundle }
         if snapshot.setState == .complete {
             recordingStatus = "Complete"
             if let directory = exportURLs?.directory, verifyingDirectory != directory {
                 verifyingDirectory = directory
                 replayStatus = "Verifying…"
+                let isGeneric = runningGeneric
                 replayTask = Task { [weak self] in
                     let status = await Task.detached(priority: .utility) {
                         do {
-                            let result = V2ReplayVerifier().verify(try V2ReplayArchive.load(from: directory))
+                            let result = try isGeneric ? GenericReplayVerifier().verify(directory: directory) :
+                                V2ReplayVerifier().verify(V2ReplayArchive.load(from: directory))
                             return result.passed ? "Passed" : "Failed at \(result.field ?? "unknown field")"
                         } catch { return "Failed: \(error.localizedDescription)" }
                     }.value

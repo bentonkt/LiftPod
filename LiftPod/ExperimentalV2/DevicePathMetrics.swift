@@ -340,7 +340,7 @@ struct DevicePathMetrics: Sendable {
     /// Fit a local out-and-back path. Closure and velocity periodicity are SOFT
     /// model observations, not measured stationary endpoints. Unobservable steady
     /// body translation is excluded: this estimates the cyclic component of speed.
-    private func cyclicFit(_ window: [Frame], integrated: [SIMD3<Double>], event: V2CycleEvidence) -> Fit? {
+    private func cyclicFit(_ window: [Frame], integrated: [SIMD3<Double>], eventID: String) -> Fit? {
         guard let c=settings.cyclic, let first=window.first, let last=window.last else { return nil }
         let duration=last.time-first.time
         guard duration > 2*configuration.minimumLegDuration else { return nil }
@@ -380,10 +380,23 @@ struct DevicePathMetrics: Sendable {
             uncertainty=max(uncertainty,sqrt(max(0,p00-2*dt*p01+dt*dt*p11+process)))
         }
         return .init(velocity:velocity,bias:bias,uncertainty:uncertainty,residual:residual,
-                     boundaryIDs:["cyclic-start-\(event.id)","cyclic-return-\(event.id)"],decisions:[],closure:closure)
+                     boundaryIDs:["cyclic-start-\(eventID)","cyclic-return-\(eventID)"],decisions:[],closure:closure)
     }
 
+    private struct CycleWindow {
+        let id: String
+        let startTimestamp: Double
+        let topTimestamp: Double?
+        let completionTimestamp: Double
+        let movementAxis: ExperimentalVector3?
+    }
     private func cyclicWindow(_ event: V2CycleEvidence, at time: Double,
+                              startShift: Double=0, endShift: Double=0) -> (window:[Frame], integral:[SIMD3<Double>], fit:Fit)? {
+        cyclicWindow(CycleWindow(id: event.id, startTimestamp: event.startTimestamp, topTimestamp: event.topTimestamp,
+                                completionTimestamp: event.completionTimestamp, movementAxis: event.movementAxis),
+                     at: time, startShift: startShift, endShift: endShift)
+    }
+    private func cyclicWindow(_ event: CycleWindow, at time: Double,
                               startShift: Double=0, endShift: Double=0) -> (window:[Frame], integral:[SIMD3<Double>], fit:Fit)? {
         func nearest(_ t:Double) -> Int? {
             frames.indices.min(by: { abs(frames[$0].time-t)<abs(frames[$1].time-t) })
@@ -405,7 +418,7 @@ struct DevicePathMetrics: Sendable {
               first.time<=event.startTimestamp+1e-9,last.time>=event.completionTimestamp,
               let lo=nearest(bottom(event.startTimestamp,c.startBoundarySearch)+startShift),
               let hi=nearest(bottom(event.completionTimestamp,configuration.reversalSearchTolerance!)+endShift),
-              hi>lo,frames[lo].time<event.topTimestamp,frames[hi].time>event.topTimestamp,
+              hi>lo, event.topTimestamp.map({ frames[lo].time < $0 && frames[hi].time > $0 }) ?? true,
               frames[hi].time-frames[lo].time<=configuration.maximumCycleDuration else { return nil }
         let delay=settings.filterAlignmentSamples
         guard hi+delay<frames.count,frames[hi+delay].time<=time+1e-9,
@@ -417,8 +430,78 @@ struct DevicePathMetrics: Sendable {
         for i in 1..<window.count {
             integral.append(integral[i-1]+(frames[lo+i+delay-1].acceleration+frames[lo+i+delay].acceleration)*0.5*(window[i].time-window[i-1].time))
         }
-        guard let fit=cyclicFit(window,integrated:integral,event:event) else { return nil }
+        guard let fit=cyclicFit(window,integrated:integral,eventID:event.id) else { return nil }
         return (window,integral,fit)
+    }
+
+    /// The generic session retains already-filtered world acceleration. Loading
+    /// a candidate window must not reset/re-run its causal filter at the boundary.
+    mutating func observePreparedGeneric(_ frame: GenericMotionFrame) {
+        let sample = frame.sample
+        guard let gravity = DevicePathMath.world(sample.gravity, attitude: sample.attitude),
+              let raw = DevicePathMath.world(sample.userAcceleration, attitude: sample.attitude) else { return }
+        let g = simd_normalize(gravity)
+        referenceGravity = referenceGravity ?? g
+        let factor = configuration.accelerationSign * configuration.standardGravity
+        frames.append(.init(time: frame.time, epoch: sample.epoch, side: sample.sensorSide,
+                            acceleration: SIMD3(frame.features[0],frame.features[1],frame.features[2])*factor,
+                            rawAcceleration: raw*factor, gravity: g,
+                            accelerationG: sample.userAcceleration.magnitude, gyro: sample.rotationRate.magnitude,
+                            deviceGravity: DevicePathMath.vector(sample.gravity)))
+    }
+
+    /// Whole-cycle estimates do not require or manufacture a physical top.
+    /// The same soft-return fit and quality gates serve both detector families.
+    func estimateGeneric(_ event: GenericCycleEvent, at time: Double) -> GenericCycleMetrics {
+        var result = GenericCycleMetrics(id: event.id, learningEpoch: event.learningEpoch)
+        result.finalizedAt = time
+        func fail(_ reason: RepMetricsReason) -> GenericCycleMetrics {
+            var r = result; r.status = .unavailable; r.reason = reason; return r
+        }
+        guard frames.count > 3, frames.allSatisfy({ $0.epoch == event.sourceEpoch }),
+              zip(frames, frames.dropFirst()).allSatisfy({ $1.time > $0.time && $1.time-$0.time <= 0.021 }) else {
+            return fail(.invalidInterval)
+        }
+        let cycle = CycleWindow(id: event.id, startTimestamp: event.startTimestamp, topTimestamp: event.turnaroundTimestamp,
+                                completionTimestamp: event.completionTimestamp, movementAxis: nil)
+        guard let local = cyclicWindow(cycle, at: time), let c = settings.cyclic else { return fail(.ambiguousBoundary) }
+        guard simd_length(local.fit.bias) <= settings.maximumBiasNorm,
+              local.fit.residual <= min(settings.maximumStationaryResidual,c.maximumVelocityPeriodicityResidual),
+              simd_length(local.fit.closure ?? .zero) <= c.maximumDisplacementResidual else { return fail(.excessiveEndpointCorrection) }
+        guard local.fit.uncertainty <= settings.maximumVelocityNormStandardDeviation else { return fail(.excessiveUncertainty) }
+        func speeds(_ fit: Fit, _ window: [Frame], from start: Double, to end: Double, vertical: Bool = false) -> (Double,Double)? {
+            let indices = window.indices.filter { window[$0].time >= start && window[$0].time <= end }
+            guard let lo = indices.first, let hi = indices.last, hi-lo >= 2 else { return nil }
+            let up = -(referenceGravity ?? SIMD3(0,0,-1))
+            let values = fit.velocity.map { vertical ? abs(simd_dot($0,up)) : simd_length($0) }
+            var area = 0.0, peak = 0.0
+            for i in (lo+1)...hi { area += (values[i-1]+values[i])*0.5*(window[i].time-window[i-1].time) }
+            for i in (lo+1)..<hi { peak = max(peak,(values[i-1]+values[i]+values[i+1])/3) }
+            return (area/(window[hi].time-window[lo].time),peak)
+        }
+        guard let speed = speeds(local.fit,local.window,from:event.startTimestamp,to:event.completionTimestamp),
+              speed.1 >= settings.minimumPeakToUncertaintyRatio*local.fit.uncertainty else { return fail(.excessiveUncertainty) }
+        for ds in [-0.04,0,0.04] {
+            for de in [-0.04,0,0.04] where ds != 0 || de != 0 {
+                guard let shifted = cyclicWindow(cycle,at:time,startShift:ds,endShift:de),
+                      let other = speeds(shifted.fit,shifted.window,from:event.startTimestamp+ds,to:event.completionTimestamp+de),
+                      abs(speed.0-other.0) <= max(0.10,speed.0*0.15),
+                      abs(speed.1-other.1) <= max(0.10,speed.1*0.15) else { return fail(.ambiguousBoundary) }
+            }
+        }
+        result.meanSpeed = speed.0; result.peakSpeed = speed.1
+        let vertical = speeds(local.fit,local.window,from:event.startTimestamp,to:event.completionTimestamp,vertical:true)
+        result.meanVerticalSpeed = vertical?.0; result.peakVerticalSpeed = vertical?.1
+        if let turn = event.turnaroundTimestamp,
+           let outward = speeds(local.fit,local.window,from:event.startTimestamp,to:event.outwardEndTimestamp ?? turn),
+           let inward = speeds(local.fit,local.window,from:event.returnStartTimestamp ?? turn,to:event.completionTimestamp) {
+            result.outwardDuration = (event.outwardEndTimestamp ?? turn)-event.startTimestamp
+            result.returnDuration = event.completionTimestamp-(event.returnStartTimestamp ?? turn)
+            result.outwardMeanSpeed = outward.0; result.returnMeanSpeed = inward.0
+        }
+        result.turnaroundPause = event.turnaroundPauseDuration; result.precedingPause = event.precedingPauseDuration
+        result.status = .available
+        return result
     }
 
     private mutating func calculate(_ event: V2CycleEvidence, at time: Double) -> RepMotionMetrics {

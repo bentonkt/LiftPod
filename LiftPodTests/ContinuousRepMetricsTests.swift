@@ -557,7 +557,7 @@ private func boundaryDecisionSummary(_ snapshot: RepMetricsSnapshot) -> String {
     }.joined(separator: ", ")
 }
 
-private struct ContinuousCaptureFixture {
+struct ContinuousCaptureFixture {
     struct Expected {
         let rawSampleCount: Int
         let uniformSampleCount: Int

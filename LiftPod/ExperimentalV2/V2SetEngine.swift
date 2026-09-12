@@ -15,6 +15,7 @@ struct V2ProcessorSnapshot: Codable, Sendable, Equatable {
     var streamVersion: String? = nil
     var qualityDetail: String? = nil
     var isRecovering: Bool? = nil
+    var generic: GenericRepSnapshot? = nil
 }
 
 protocol V2RecordingSink: Sendable {
