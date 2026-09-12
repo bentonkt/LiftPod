@@ -178,10 +178,16 @@ final class ExperimentalV2Model: ObservableObject {
         if force { await apply(next) }
     }
 
+    private var phaseDirectories = Set<URL>()
+
     private func apply(_ next: V2ProcessorSnapshot) async {
         snapshot = next
         if runningGeneric { exportURLs = await genericSession.completedBundle }
         else { exportURLs = await engine.completedBundle }
+        if runningGeneric, snapshot.setState == .complete || snapshot.setState == .interrupted,
+           let directory = exportURLs?.directory, phaseDirectories.insert(directory).inserted {
+            Task { _ = await PostSetPhaseService.shared.run(directory:directory) }
+        }
         if snapshot.setState == .complete {
             recordingStatus = "Complete"
             if let directory = exportURLs?.directory, verifyingDirectory != directory {

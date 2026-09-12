@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		A1C0AC000000000000000002 /* AIWorkoutCoach.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0AC000000000000000001; };
+		BB09594A00000000000000F0 /* PostSetPhaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA09594A00000000000000F0; };
+		BB09594A0000000000000001 /* PostSetPhaseService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA09594A0000000000000001; };
+		BB09594A0000000000000000 /* PostSetPhaseAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA09594A0000000000000000; };
 		047FE9A5D31328741887F04C /* ExperimentalV1TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F40C749940C625DA78416EA9 /* ExperimentalV1TestSupport.swift */; };
 		04B027484B8EBCE4521D4CC8 /* ProcessedCSVExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 161BAFCB5EE4778AE36CAA31 /* ProcessedCSVExportTests.swift */; };
 		052015A891B264170DD45267 /* ExperimentalDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53A7103A613BB4CF247C19C6 /* ExperimentalDetectorTests.swift */; };
@@ -119,6 +122,9 @@
 
 /* Begin PBXFileReference section */
 		A1C0AC000000000000000001 /* AIWorkoutCoach.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Workout/AIWorkoutCoach.swift"; sourceTree = "<group>"; };
+		AA09594A00000000000000F0 /* PostSetPhaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostSetPhaseTests.swift; sourceTree = "<group>"; };
+		AA09594A0000000000000001 /* PostSetPhaseService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostSetPhaseService.swift; sourceTree = "<group>"; };
+		AA09594A0000000000000000 /* PostSetPhaseAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostSetPhaseAnalysis.swift; sourceTree = "<group>"; };
 		0197CF8015FF8D4D19436C18 /* RawMotionCSVDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawMotionCSVDecoder.swift; sourceTree = "<group>"; };
 		048EDBE53B77DC7E613C0F56 /* GenericRepTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenericRepTypes.swift; sourceTree = "<group>"; };
 		06624E3934144C0B8783D326 /* RawMotionSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawMotionSample.swift; sourceTree = "<group>"; };
@@ -284,6 +290,7 @@
 				F40C749940C625DA78416EA9 /* ExperimentalV1TestSupport.swift */,
 				6C3D1BBAD261E3FECA0BE395 /* ExperimentalV2TestSupport.swift */,
 				5D243E8878DE3DE8DD63558D /* GenericRepTests.swift */,
+				AA09594A00000000000000F0 /* PostSetPhaseTests.swift */,
 				C0E36ED107D11A93DC6915F9 /* LateralRaiseIntegrationTests.swift */,
 				9FB030F4474BCA1D7B99EF32 /* LowPassFilterTests.swift */,
 				CB77526FEBE7B2AAEF2E7F69 /* PassiveRepMetricsTests.swift */,
@@ -350,6 +357,8 @@
 				1874D4E66A5BC98AD33BDC90 /* ExperimentalV2Types.swift */,
 				B30DE1947BD8BCD6335DFBA3 /* GenericCycleDetector.swift */,
 				19E028AF736593B8DF138EA6 /* GenericPhysicalPhases.swift */,
+				AA09594A0000000000000001 /* PostSetPhaseService.swift */,
+				AA09594A0000000000000000 /* PostSetPhaseAnalysis.swift */,
 				7DA1032ADBDDBFC62D2C26C9 /* GenericRepEvaluation.swift */,
 				D59E87EB0E5153506D456864 /* GenericRepSession.swift */,
 				048EDBE53B77DC7E613C0F56 /* GenericRepTypes.swift */,
@@ -550,6 +559,8 @@
 				AF896C7F8AFD6A8535D0B14C /* ExperimentalV2Types.swift in Sources */,
 				B12708DF5D887F0A33D22C4F /* GenericCycleDetector.swift in Sources */,
 				3C48A333F8E4C3CEA7EE2599 /* GenericPhysicalPhases.swift in Sources */,
+				BB09594A0000000000000001 /* PostSetPhaseService.swift in Sources */,
+				BB09594A0000000000000000 /* PostSetPhaseAnalysis.swift in Sources */,
 				A617785741414945BF631D31 /* GenericRepEvaluation.swift in Sources */,
 				CEEE91962C17CF4502F1E94C /* GenericRepSession.swift in Sources */,
 				8078A95C66DBB5C5C7AF43A2 /* GenericRepTypes.swift in Sources */,
@@ -606,6 +617,7 @@
 				8D68DEAAC4BA97FE4AE0E89F /* WorkoutFlowTests.swift in Sources */,
 				5DA8272A9E06C67708006BC4 /* ExperimentalV2TestSupport.swift in Sources */,
 				5F5FBFFCD59BB9A1D9E60C3F /* GenericRepTests.swift in Sources */,
+				BB09594A00000000000000F0 /* PostSetPhaseTests.swift in Sources */,
 				33BB8F756F15878BD967891A /* LateralRaiseIntegrationTests.swift in Sources */,
 				E60CEFEDB2B36170B4C5AA07 /* LowPassFilterTests.swift in Sources */,
 				3CE6CE2F50FD27BE4A8FF603 /* PassiveRepMetricsTests.swift in Sources */,

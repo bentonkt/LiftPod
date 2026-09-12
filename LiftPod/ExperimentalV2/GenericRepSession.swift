@@ -47,10 +47,11 @@ struct GenericSessionManifest: Codable, Equatable, Sendable {
 final class GenericFrameHistory: @unchecked Sendable {
     let url: URL
     private let writer: FileHandle
-    init(url: URL) throws {
+    init(url: URL, append: Bool = false) throws {
         self.url = url
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        writer = try FileHandle(forWritingTo: url)
+        if !append || !FileManager.default.fileExists(atPath:url.path) { FileManager.default.createFile(atPath:url.path,contents:nil) }
+        writer = try FileHandle(forWritingTo:url)
+        if append { try writer.seekToEnd() }
     }
     deinit { try? writer.close() }
     func append(_ frame: GenericMotionFrame) throws {

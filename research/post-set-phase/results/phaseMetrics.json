@@ -1,0 +1,13 @@
+{
+  "sets": 62,
+  "referenceSegments": 1482,
+  "matchedSegments": 1479,
+  "segmentRecall": 0.9979757085020243,
+  "segmentPrecisionWithinAnnotatedMotion": 0.9973027646662171,
+  "durationMAE": 0.12474775550391078,
+  "durationP95": 0.2841807059643018,
+  "emissionLatencyP95": 2.4200000000419095,
+  "unreviewedContextSegments": 9,
+  "boundaryMAE": 0.07808526361677043,
+  "boundaryP95": 0.18000000003143207
+}

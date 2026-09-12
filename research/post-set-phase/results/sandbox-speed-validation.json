@@ -1,0 +1,18 @@
+{
+  "version": "post-set-local-drift-speed-v2",
+  "tests": 363,
+  "failures": 0,
+  "testSeconds": 95.25,
+  "log": "/tmp/liftpod-phase-speed-sandbox-full.log",
+  "focusedTests": 11,
+  "mergedBase": "48c3574",
+  "sourceBranchCommit": "ce62226",
+  "sources": {
+    "LiftPod/ExperimentalV2/PostSetPhaseAnalysis.swift": "2835839174c5761ca6b69420900824621f131cf047b145b6a8f12826fb60a192",
+    "LiftPod/ExperimentalV2/PostSetPhaseService.swift": "254f1b097607faec7c0288085ed82ea8bb416a84c433a203306e52673a5b83b2",
+    "LiftPod/Workout/WorkoutView.swift": "d3a4ea767d7d3d2b2c8c3e04cf4d9b16154598c461cf26486adc27fac919be04",
+    "LiftPod/Workout/WorkoutModel.swift": "f7e14a715caa2fadcab09fcf408830d2e5675d6fce7a3fd972b4befa86acce7a",
+    "LiftPodTests/PostSetPhaseTests.swift": "b4a1f30e694209d6daa02f4bbf6c18b5c015c7d5b900a6dba47e316c17a73ef4"
+  },
+  "deviceDeployed": false
+}

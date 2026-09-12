@@ -10,6 +10,7 @@ struct AutoWorkoutProcessor {
     private var lastMetricUpdate = -Double.infinity
     private var sourceTimeOffset = 0.0
     private var awaitingResumedClock = false
+    private(set) var phaseFrames: [GenericMotionFrame] = []
     private(set) var latestFrame: GenericMotionFrame?
     private(set) var latestEvidence: AutoEvidenceBatch?
     private(set) var evidenceBatches: [AutoEvidenceBatch] = []
@@ -25,7 +26,7 @@ struct AutoWorkoutProcessor {
     }
 
     mutating func apply(_ input: AutoWorkoutInput) throws {
-        latestFrame = nil; latestEvidence = nil; evidenceBatches = []
+        latestFrame = nil; latestEvidence = nil; evidenceBatches = []; phaseFrames = []
         if input.kind == .sample {
             guard [.connecting,.running].contains(snapshot.state), let raw = input.raw?.sample else {
                 throw V2Error.invalidLifecycle("automatic sample outside active capture")
@@ -57,7 +58,7 @@ struct AutoWorkoutProcessor {
                     interpolationStatus:native.interpolationStatus,epoch:native.epoch)
                 let batch = engine.observe(sample)
                 latestEvidence = batch; evidenceBatches.append(batch); latestFrame = engine.latestPreparedFrame
-                if let frame = latestFrame { metrics.observe(frame) }
+                if let frame = latestFrame { metrics.observe(frame); phaseFrames.append(frame) }
                 coordinator.consume(batch)
             }
         } else if input.kind == .clock {
@@ -135,6 +136,7 @@ actor AutoWorkoutSession {
     private var transactions: FileHandle?
     private var rawWriter: FileHandle?
     private var sequence = 0
+    private var phaseHistory: GenericFrameHistory?
     private(set) var directory: URL?
     var snapshot: AutoWorkoutSnapshot { processor?.snapshot ?? .init() }
     var exportURLs: [URL] {
@@ -155,6 +157,7 @@ actor AutoWorkoutSession {
     }
 
     private func open(configuration: AutoWorkoutConfiguration, folder: URL) throws {
+        phaseHistory = nil
         guard !FileManager.default.fileExists(atPath:folder.path) else { throw V2Error.recordingFailure("workout directory already exists") }
         let next = try AutoWorkoutProcessor(configuration:configuration)
         try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
@@ -202,6 +205,11 @@ actor AutoWorkoutSession {
             if let raw=input.raw?.sample { try rawWriter?.write(contentsOf:Data((CSVRecorder.row(for:raw)+"\n").utf8)) }
             var data=try GenericHash.data(tx);data.append(10);try transactions?.write(contentsOf:data)
             processor=next;sequence+=1
+            if phaseHistory == nil {
+                let path = directory.appendingPathComponent("prepared-motion.jsonl")
+                phaseHistory = try? GenericFrameHistory(url:path,append:true)
+            }
+            for frame in next.phaseFrames { try? phaseHistory?.append(frame) }
             if input.kind != .sample || sequence % 50 == 0 { try transactions?.synchronize();try rawWriter?.synchronize() }
             if next.snapshot.state == .finished || [.pause,.suspend,.correction].contains(input.kind) { try checkpoint() }
             if next.snapshot.state == .finished { try transactions?.close();try rawWriter?.close();transactions=nil;rawWriter=nil }

@@ -1,0 +1,674 @@
+[
+  {
+    "stress": "clean",
+    "up": 0.8,
+    "down": 0.8,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.02249999999999991,
+          "p95": 0.03300000000000049,
+          "bias": 0.02249999999999991
+        },
+        "reversal": {
+          "mae": 0.009647655917921577,
+          "p95": 0.020425406204569528,
+          "bias": 1.977080595808034e-05
+        },
+        "end": {
+          "mae": 0.022500000000000686,
+          "p95": 0.03300000000000106,
+          "bias": -0.022500000000000686
+        },
+        "reversalOutsideBand": {
+          "mae": 0.009647655917921577,
+          "p95": 0.020425406204569528,
+          "bias": 0.009647655917921577
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.022600423438999012,
+      "durationP95": 0.06036217300837249,
+      "emissionLatencyP95": 1.58,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.016073827958960937,
+      "boundaryP95": 0.029264404388183195
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "clean",
+    "up": 0.6,
+    "down": 2.4,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.0025000000000000022,
+          "p95": 0.013000000000000001,
+          "bias": 0.0025000000000000022
+        },
+        "reversal": {
+          "mae": 0.05639395038275538,
+          "p95": 0.11085823302499857,
+          "bias": 0.05639395038275538
+        },
+        "end": {
+          "mae": 0.2875000000000003,
+          "p95": 0.3000000000000007,
+          "bias": -0.2875000000000003
+        },
+        "reversalOutsideBand": {
+          "mae": 0.05639395038275538,
+          "p95": 0.11085823302499857,
+          "bias": 0.05639395038275538
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.20008741529502483,
+      "durationP95": 0.3494637551362245,
+      "emissionLatencyP95": 2.7,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.10069697519137777,
+      "boundaryP95": 0.3000000000000007
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "clean",
+    "up": 2.4,
+    "down": 0.6,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.2875000000000004,
+          "p95": 0.3000000000000007,
+          "bias": 0.2875000000000004
+        },
+        "reversal": {
+          "mae": 0.056328195515583046,
+          "p95": 0.11085823313020172,
+          "bias": -0.056328195515583046
+        },
+        "end": {
+          "mae": 0.0024999999999999467,
+          "p95": 0.012999999999999713,
+          "bias": -0.0024999999999999467
+        },
+        "reversalOutsideBand": {
+          "mae": 0.056328195515583046,
+          "p95": 0.11085823313020172,
+          "bias": 0.056328195515583046
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.20008741531525698,
+      "durationP95": 0.34946375513622563,
+      "emissionLatencyP95": 3.0,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.10066409775779162,
+      "boundaryP95": 0.3000000000000007
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "clean",
+    "up": 1,
+    "down": 1,
+    "hold": 0.5,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.027499999999999636,
+          "p95": 0.058999999999999865,
+          "bias": 0.027499999999999636
+        },
+        "reversal": {
+          "mae": 0.2086483285337452,
+          "p95": 0.27180789959176255,
+          "bias": 0.14040861694034562
+        },
+        "end": {
+          "mae": 0.024999999999999523,
+          "p95": 0.04599999999999915,
+          "bias": -0.024999999999999523
+        },
+        "reversalOutsideBand": {
+          "mae": 0.005328659171315364,
+          "p95": 0.021807899591762523,
+          "bias": 0.005328659171315364
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.24657865917131563,
+      "durationP95": 0.5004925318410933,
+      "emissionLatencyP95": 2.4800000000000004,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.14078932958565749,
+      "boundaryP95": 0.47461944968121217
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "noise_bias",
+    "up": 0.8,
+    "down": 0.8,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.02249999999999991,
+          "p95": 0.03300000000000049,
+          "bias": 0.02249999999999991
+        },
+        "reversal": {
+          "mae": 0.011093773703800797,
+          "p95": 0.021818045365628792,
+          "bias": 0.0005985436130704624
+        },
+        "end": {
+          "mae": 0.025000000000000633,
+          "p95": 0.040000000000000924,
+          "bias": -0.025000000000000633
+        },
+        "reversalOutsideBand": {
+          "mae": 0.011093773703800797,
+          "p95": 0.021818045365628792,
+          "bias": 0.011093773703800797
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.02417956216833772,
+      "durationP95": 0.061551920852886965,
+      "emissionLatencyP95": 1.58,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.017421886851900534,
+      "boundaryP95": 0.04000000000000044
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "noise_bias",
+    "up": 0.6,
+    "down": 2.4,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.0025000000000000022,
+          "p95": 0.013000000000000001,
+          "bias": 0.0025000000000000022
+        },
+        "reversal": {
+          "mae": 0.057978356842876416,
+          "p95": 0.12627156993777464,
+          "bias": 0.057978356842876416
+        },
+        "end": {
+          "mae": 0.28500000000000014,
+          "p95": 0.3200000000000003,
+          "bias": -0.28500000000000014
+        },
+        "reversalOutsideBand": {
+          "mae": 0.057978356842876416,
+          "p95": 0.12627156993777464,
+          "bias": 0.057978356842876416
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.20007044615763536,
+      "durationP95": 0.3636507904427366,
+      "emissionLatencyP95": 2.7399999999999993,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.10086417842143824,
+      "boundaryP95": 0.3200000000000003
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "noise_bias",
+    "up": 2.4,
+    "down": 0.6,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.29000000000000037,
+          "p95": 0.33999999999999986,
+          "bias": 0.29000000000000037
+        },
+        "reversal": {
+          "mae": 0.05350906680286577,
+          "p95": 0.0972540547329799,
+          "bias": -0.05350906680286577
+        },
+        "end": {
+          "mae": 0.0024999999999999467,
+          "p95": 0.012999999999999713,
+          "bias": -0.0024999999999999467
+        },
+        "reversalOutsideBand": {
+          "mae": 0.05350906680286577,
+          "p95": 0.0972540547329799,
+          "bias": 0.05350906680286577
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.1988746684990781,
+      "durationP95": 0.39308321112479727,
+      "emissionLatencyP95": 3.0,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.09987953340143296,
+      "boundaryP95": 0.33999999999999986
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "noise_bias",
+    "up": 1,
+    "down": 1,
+    "hold": 0.5,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.027499999999999636,
+          "p95": 0.058999999999999865,
+          "bias": 0.027499999999999636
+        },
+        "reversal": {
+          "mae": 0.2214113134311315,
+          "p95": 0.2709009789696868,
+          "bias": -0.004849297880880704
+        },
+        "end": {
+          "mae": 0.024999999999999523,
+          "p95": 0.04599999999999915,
+          "bias": -0.024999999999999523
+        },
+        "reversalOutsideBand": {
+          "mae": 0.005111901977405825,
+          "p95": 0.020900978969686776,
+          "bias": 0.005111901977405825
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.2463619019774061,
+      "durationP95": 0.4996919894761845,
+      "emissionLatencyP95": 2.4800000000000004,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.1406809509887027,
+      "boundaryP95": 0.4970074541040212
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "varying_drift",
+    "up": 0.8,
+    "down": 0.8,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.025603074957645966,
+          "p95": 0.04850558614421262,
+          "bias": 0.025603074957645966
+        },
+        "reversal": {
+          "mae": 0.01891014253322401,
+          "p95": 0.03133308166072224,
+          "bias": -0.0011814959703727868
+        },
+        "end": {
+          "mae": 0.02487672747069536,
+          "p95": 0.05358108759812222,
+          "bias": -0.02487672747069536
+        },
+        "reversalOutsideBand": {
+          "mae": 0.01891014253322401,
+          "p95": 0.03133308166072224,
+          "bias": 0.01891014253322401
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.027332333828823746,
+      "durationP95": 0.08107726318575842,
+      "emissionLatencyP95": 1.7024607093233248,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.022075021873697337,
+      "boundaryP95": 0.045992466382603285
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "varying_drift",
+    "up": 0.6,
+    "down": 2.4,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.010812929917543068,
+          "p95": 0.019207205899096746,
+          "bias": 0.001418326907550116
+        },
+        "reversal": {
+          "mae": 0.05317412074369493,
+          "p95": 0.12102546323529224,
+          "bias": 0.05317412074369493
+        },
+        "end": {
+          "mae": 0.24883260005679797,
+          "p95": 0.34045797667322797,
+          "bias": -0.24883260005679797
+        },
+        "reversalOutsideBand": {
+          "mae": 0.05317412074369493,
+          "p95": 0.12102546323529224,
+          "bias": 0.05317412074369493
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.17733317516599115,
+      "durationP95": 0.38331766263435174,
+      "emissionLatencyP95": 3.0290000000000004,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.09149844286543272,
+      "boundaryP95": 0.30402794605065014
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "varying_drift",
+    "up": 2.4,
+    "down": 0.6,
+    "hold": 0,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.2889682041836229,
+          "p95": 0.4154881046616663,
+          "bias": 0.2889682041836229
+        },
+        "reversal": {
+          "mae": 0.05754708871138953,
+          "p95": 0.1144406803673481,
+          "bias": -0.05754708871138953
+        },
+        "end": {
+          "mae": 0.014034588001750503,
+          "p95": 0.030447252615974026,
+          "bias": 0.004919872041690976
+        },
+        "reversalOutsideBand": {
+          "mae": 0.05754708871138953,
+          "p95": 0.1144406803673481,
+          "bias": 0.05754708871138953
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.20812486862828383,
+      "durationP95": 0.48672003347945814,
+      "emissionLatencyP95": 3.2838883037852757,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.10452424240203811,
+      "boundaryP95": 0.3670888467118139
+    },
+    "mapped": 8
+  },
+  {
+    "stress": "varying_drift",
+    "up": 1,
+    "down": 1,
+    "hold": 0.5,
+    "reps": {
+      "referenceReps": 8,
+      "predictedReps": 8,
+      "matchedReps": 8,
+      "missedReps": 0,
+      "extraReps": 0,
+      "unscoredContextReps": 0,
+      "ignoredUncertainReps": 0,
+      "sets": 1,
+      "countMAE": 0.0,
+      "exactCountSets": 1,
+      "precision": 1.0,
+      "recall": 1.0,
+      "boundaryErrors": {
+        "start": {
+          "mae": 0.035128843697056544,
+          "p95": 0.05649999999999997,
+          "bias": 0.035128843697056544
+        },
+        "reversal": {
+          "mae": 0.22572778905348975,
+          "p95": 0.27734419771745705,
+          "bias": -0.10332385851605749
+        },
+        "end": {
+          "mae": 0.025470909338370762,
+          "p95": 0.055161813544714444,
+          "bias": -0.025470909338370762
+        },
+        "reversalOutsideBand": {
+          "mae": 0.006626530777994438,
+          "p95": 0.027344197717457074,
+          "bias": 0.006626530777994438
+        }
+      }
+    },
+    "phases": {
+      "sets": 1,
+      "referenceSegments": 16,
+      "matchedSegments": 16,
+      "segmentRecall": 1.0,
+      "segmentPrecisionWithinAnnotatedMotion": 1.0,
+      "durationMAE": 0.2472731008327341,
+      "durationP95": 0.495900506183871,
+      "emissionLatencyP95": 2.632075886654153,
+      "unreviewedContextSegments": 0,
+      "boundaryMAE": 0.14346320364785403,
+      "boundaryP95": 0.5032231007463204
+    },
+    "mapped": 8
+  }
+]

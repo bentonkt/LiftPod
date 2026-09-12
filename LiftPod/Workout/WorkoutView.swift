@@ -419,6 +419,7 @@ struct WorkoutView: View {
             }.padding(18).glass(radius: 22)
             RepSpeedChart(series: workout.repSpeedSeries, compact: true)
             if workout.exerciseAutoDetect && workout.classificationAvailable { exerciseSuggestionCard }
+            phaseSpeedReadout(set)
             aiNotes(set)
             nextSetCard
             if workout.automaticWorkoutActive {
@@ -486,12 +487,59 @@ struct WorkoutView: View {
         }
     }
 
+    private func phaseSpeedReadout(_ set: WorkoutSetResult) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("UP / DOWN SPEED").font(.caption.weight(.semibold)).tracking(1.2)
+            if let analysis=set.phaseAnalysis {
+                if analysis.status == .pending {
+                    ProgressView("Analyzing phase speeds…")
+                } else {
+                    LabeledContent("Average up speed", value:phaseSpeedText(analysis.summary.averageRaisingSpeedMPS))
+                        .accessibilityIdentifier("post-set-up-speed")
+                    LabeledContent("Average down speed", value:phaseSpeedText(analysis.summary.averageLoweringSpeedMPS))
+                        .accessibilityIdentifier("post-set-down-speed")
+                    Text("Estimated path speed · \(analysis.summary.speedMeasuredReps ?? 0) of \(analysis.summary.countedReps) reps")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if analysis.status == .failed { Text("Phase analysis unavailable for this set.").font(.caption).foregroundStyle(.secondary) }
+                    let measured=analysis.reps.filter { $0.countedRepID != nil }.sorted { ($0.countedRepNumber ?? 0)<($1.countedRepNumber ?? 0) }
+                    if !measured.isEmpty {
+                        DisclosureGroup("Speed by rep") {
+                            HStack { Text("Rep");Spacer();Text("Up").frame(width:90,alignment:.trailing);Text("Down").frame(width:90,alignment:.trailing) }.font(.caption).foregroundStyle(.secondary)
+                            ForEach(Array(measured.enumerated()),id:\.offset) { _, rep in
+                                HStack {
+                                    Text(rep.countedRepNumber.map(String.init) ?? "—");Spacer()
+                                    Text(phaseSpeedText(rep.raisingMeanSpeedMPS)).frame(width:90,alignment:.trailing)
+                                    Text(phaseSpeedText(rep.loweringMeanSpeedMPS)).frame(width:90,alignment:.trailing)
+                                }.font(.caption).monospacedDigit()
+                            }
+                        }
+                    }
+                    Text("Unavailable means direction or speed could not be established. Phase time may include pauses.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(workout.automaticRecoveryProvisional ? "Available once this set is finalized." : "No phase speed analysis for this set.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(18).glass(radius:22)
+            .accessibilityIdentifier("post-set-phase-speeds")
+    }
+
+    private func phaseSpeedText(_ speed: Double?) -> String {
+        guard let speed,speed.isFinite,speed>0 else { return "—" }
+        return "≈\(speed.formatted(.number.precision(.fractionLength(2)))) m/s"
+    }
+
     private func setSpeedReadout(_ set: WorkoutSetResult, rir: String? = nil,
                                  showsRIR: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             LabeledContent("Average speed", value: set.averageSpeedMPS.map {
                 "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
             } ?? "Not measured")
+            if !showsRIR, let phase=set.phaseAnalysis {
+                LabeledContent("Average up speed",value:phaseSpeedText(phase.summary.averageRaisingSpeedMPS))
+                LabeledContent("Average down speed",value:phaseSpeedText(phase.summary.averageLoweringSpeedMPS))
+            }
             LabeledContent("Peak speed", value: set.peakSpeedMPS.map {
                 "\($0.formatted(.number.precision(.fractionLength(2)))) m/s"
             } ?? "Not measured")

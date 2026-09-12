@@ -1,0 +1,36 @@
+{
+  "referenceReps": 741,
+  "predictedReps": 742,
+  "matchedReps": 739,
+  "missedReps": 2,
+  "extraReps": 3,
+  "unscoredContextReps": 1,
+  "ignoredUncertainReps": 3,
+  "sets": 62,
+  "countMAE": 0.08064516129032258,
+  "exactCountSets": 57,
+  "precision": 0.9959568733153639,
+  "recall": 0.9973009446693657,
+  "boundaryErrors": {
+    "start": {
+      "mae": 0.07493910690431804,
+      "p95": 0.3219999999832374,
+      "bias": 0.022327469553412773
+    },
+    "reversal": {
+      "mae": 0.060941863670593975,
+      "p95": 0.17171971703413766,
+      "bias": 0.04485183277643776
+    },
+    "end": {
+      "mae": 0.0791339648205028,
+      "p95": 0.3399999999748555,
+      "bias": 0.03507442489854293
+    },
+    "reversalOutsideBand": {
+      "mae": 0.03593262406070076,
+      "p95": 0.021906099101669366,
+      "bias": 0.03593262406070076
+    }
+  }
+}

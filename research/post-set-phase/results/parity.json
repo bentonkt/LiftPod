@@ -1,0 +1,436 @@
+[
+  {
+    "setID": "66FFDB6C-86E3-4D21-94A4-A6DA85C68F53",
+    "reference": 13,
+    "native": 13,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "0D97C3D1-0716-4C6F-AAD0-FBD2FF41D955",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 4.440892098500626e-16,
+    "passOneSample": true
+  },
+  {
+    "setID": "F81311C1-7F37-4456-B59C-A4D87F7E3516",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "DE952046-4675-49FC-8B3B-0F390BEAD736",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "26C658E8-7ECE-4863-B59D-F3241D90B05E",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "70E50E52-FE38-4ECF-9AA4-D83A070BCDF9",
+    "reference": 13,
+    "native": 13,
+    "maximumBoundaryDifference": 8.433342912894659e-11,
+    "passOneSample": true
+  },
+  {
+    "setID": "1D91761F-D598-469E-8B13-A8BDEB7881A7",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 1.8893331343861064e-11,
+    "passOneSample": true
+  },
+  {
+    "setID": "0399601D-7955-45DF-ACF2-1E588087CEFD",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "C5A38354-6749-40C3-A197-84D496DCFF50",
+    "reference": 13,
+    "native": 13,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "DBD3E796-F370-4DD3-A28C-D3310BD23E0F",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "A2EFC4B0-0A38-4901-8CF2-FCD4E275EF6D",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "2612D6B9-865D-41CD-A2B4-91C69579A341",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "9AB998C9-0408-4131-B7C1-889AE9A3FE0F",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "6E20A9FE-9257-4554-BEC7-1CBBCCAB0D31",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 4.440892098500626e-16,
+    "passOneSample": true
+  },
+  {
+    "setID": "1BCE0F70-B537-4D03-B2B8-FD4FB2079D63",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "96FAA6B5-2966-456A-A1C7-02052AABD7CC",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "22F133FE-053C-4F75-9323-4F8D7B754ACA",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "F0AB85D6-528B-4F20-8433-43EEC8822A97",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 7.105427357601002e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "40A716D3-EDA1-4179-9D2F-EEC0F35F7ADE",
+    "reference": 13,
+    "native": 13,
+    "maximumBoundaryDifference": 2.1316282072803006e-14,
+    "passOneSample": true
+  },
+  {
+    "setID": "9400AD5C-7915-4FA6-89E0-5C060E682F47",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 2.220446049250313e-16,
+    "passOneSample": true
+  },
+  {
+    "setID": "90163F50-FE6E-4D55-83A4-597429F67A90",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 7.105427357601002e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "C75F4C0E-D7A8-4856-BA3E-E8FF130D04AE",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 7.105427357601002e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "50C5B12C-B3D8-444F-81C9-6AF297E98573",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "7554C360-9D3B-4A93-826A-E11E10CEAA12",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 7.105427357601002e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "55A63C7A-BD0A-44D1-A2DA-4377A3DB1F38",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 7.105427357601002e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "1A864828-D864-4B00-AAB5-4EB3486A9F87",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "020DEBF6-4081-4094-BA02-B1402BE9A9C4",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "9049126A-AA9A-4EEF-B990-B0CD71935E5E",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 1.7763568394002505e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "B522E9F8-F06E-4986-9209-94CC9CBBCB56",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 7.105427357601002e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "1C755C60-CDE6-4B6A-BE28-72242BF4B790",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "02D87CA2-68A6-4B16-9D03-38174FA083C4",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "0370B358-18DC-4467-9F16-D690D5E9685E",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "C4B04158-1C17-44C1-9605-816218CC71A6",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 1.7763568394002505e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "D08A6E50-8A37-4960-9E32-9E161BB8E287",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "E9ABDF1F-E2F9-4D24-993F-47A8CF635210",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 1.7763568394002505e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "99B6C3DC-6EE4-4E8D-B01A-36692F35CDC0",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 1.7763568394002505e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "C85B6102-E572-4833-BB61-13EFC6616860",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "2A21CBEB-C64C-4A57-83C1-C6AF763CF0AF",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "72C34824-AD11-4AB2-94A7-B86405B39461",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "699DAF45-1498-42F2-B49E-4A779109F9EC",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "1E1722E1-D0AB-49C6-855B-7A7B49DD55DC",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 8.881784197001252e-16,
+    "passOneSample": true
+  },
+  {
+    "setID": "5DF6A6A8-4D6F-4CFC-96AA-7948178A0CB1",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "5D2413C5-2996-4264-8D86-A39487DC6A4C",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "AF15C94E-6504-498E-A4E1-C9E6AF8B5C6C",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "79A35687-E313-4B9D-A83D-D3B48D31C7D0",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 4.440892098500626e-16,
+    "passOneSample": true
+  },
+  {
+    "setID": "D8D3D54F-F261-4AB8-BC04-27930D60101B",
+    "reference": 11,
+    "native": 11,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "B75378CD-91FD-4362-8065-EE41926538AC",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "D32A8FAC-D2E0-4E4C-88FB-937C87625448",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "F5706F83-2591-491F-9101-21F4B4CAE110",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "8A21D77E-7309-4551-9454-C0957E261C27",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "2B4BD34B-5721-470F-85E2-0E5A98AF74A1",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "7779044D-DD28-417D-91C6-F6E348F2171F",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 7.105427357601002e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "4F512F6B-601A-4F6D-9E2C-E55CE71A8AAB",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 1.7763568394002505e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "1E5C767F-5CEA-4D68-B7D3-EFD4B8763ECA",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "C0D85CD2-6E60-4618-8C04-43D3F6D7D46C",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 1.7763568394002505e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "3C10457A-5CB5-43AB-BF23-80D24BBCD11C",
+    "reference": 11,
+    "native": 11,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "EC3FF341-94B6-42E8-9737-C25EF60D7BA3",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 8.881784197001252e-16,
+    "passOneSample": true
+  },
+  {
+    "setID": "1ADB7E63-3E51-4212-924E-73A558852ECB",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 3.552713678800501e-15,
+    "passOneSample": true
+  },
+  {
+    "setID": "44854FC9-65AD-4FD2-BA87-B800DC2E3425",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 0.0,
+    "passOneSample": true
+  },
+  {
+    "setID": "1A54A52A-A4E8-4A11-9436-E238C5102909",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 8.881784197001252e-16,
+    "passOneSample": true
+  },
+  {
+    "setID": "2F22D50D-830E-4835-89C8-C60D32183F6C",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 8.881784197001252e-16,
+    "passOneSample": true
+  },
+  {
+    "setID": "E9B9779E-7079-42B4-9B41-1F9BF758BEC4",
+    "reference": 12,
+    "native": 12,
+    "maximumBoundaryDifference": 1.7763568394002505e-15,
+    "passOneSample": true
+  }
+]

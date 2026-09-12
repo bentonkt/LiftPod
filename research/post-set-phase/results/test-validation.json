@@ -1,0 +1,16 @@
+{
+  "fullSuite": {
+    "tests": 333,
+    "failures": 0,
+    "seconds": 115.018,
+    "scheme": "LiftPod",
+    "destination": "iOS Simulator B12F1814-792C-412E-9DFE-C4D3A8C67318",
+    "log": "/tmp/liftpod-post-phase-full.log"
+  },
+  "focusedInitialRun": {
+    "tests": 7,
+    "failures": 0,
+    "log": "/tmp/liftpod-post-phase-targeted.log"
+  },
+  "devicePerformanceMeasured": false
+}
