@@ -15,8 +15,10 @@ Uncertain direction remains unknown; counter matching and all existing 3D speed
 fit, drift, uncertainty and boundary sensitivity checks remain unchanged.
 
 Optional `proposalSource` and `directionReason` fields record the decision.
-The post-set card and per-rep table now explain exclusions such as weak vertical
+The post-set card explains unavailable averages caused by weak vertical
 motion, ambiguous phase association, excessive drift or unstable boundaries.
+Only the two set averages are displayed, with a compact measured-rep count;
+individual rep speeds remain stored for analysis but are not shown.
 The version bump invalidates previous cached analysis when a set is reanalyzed;
 previously saved workout screens are not automatically migrated.
 
@@ -35,8 +37,7 @@ below apply to the older algorithm, not independent validation of v3 boundaries.
 
 # Up/down phase speeds in the post-set screen
 
-The sandbox integration adds **Average up speed**, **Average down speed**, and
-an expandable **Speed by rep** table after a set. Values are estimated 3D device
+The sandbox integration adds **Average up speed**, **Average down speed** after a set. Values are estimated 3D device
 path speeds in m/s, over the newly detected raising/lowering phase intervals;
 they are not signed vertical velocity and are not inferred from phase duration
 alone. Set averages are arithmetic means over the same paired set of measured,

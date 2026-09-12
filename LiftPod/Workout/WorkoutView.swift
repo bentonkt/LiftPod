@@ -501,31 +501,11 @@ struct WorkoutView: View {
                     Text("Estimated path speed · \(analysis.summary.speedMeasuredReps ?? 0) of \(analysis.summary.countedReps) reps")
                         .font(.caption).foregroundStyle(.secondary)
                     if analysis.status == .failed { Text("Phase analysis unavailable for this set.").font(.caption).foregroundStyle(.secondary) }
-                    let exclusions=Array(Set(analysis.reps.filter { $0.countedRepID != nil }.compactMap(\.speedUnavailableExplanation))).sorted()
-                    ForEach(exclusions,id: \.self) { explanation in
+                    if analysis.status != .failed && (analysis.summary.speedMeasuredReps ?? 0) == 0 {
+                        let explanation=analysis.reps.first(where: { $0.countedRepID != nil })?.speedUnavailableExplanation
+                            ?? "No complete phase intervals could be matched to the counted reps."
                         Text(explanation).font(.caption).foregroundStyle(.secondary)
                     }
-                    if analysis.reps.allSatisfy({ $0.countedRepID == nil }) {
-                        Text("No complete phase intervals could be matched to the counted reps.").font(.caption).foregroundStyle(.secondary)
-                    }
-                    let measured=analysis.reps.filter { $0.countedRepID != nil }.sorted { ($0.countedRepNumber ?? 0)<($1.countedRepNumber ?? 0) }
-                    if !measured.isEmpty {
-                        DisclosureGroup("Speed by rep") {
-                            HStack { Text("Rep");Spacer();Text("Up").frame(width:90,alignment:.trailing);Text("Down").frame(width:90,alignment:.trailing) }.font(.caption).foregroundStyle(.secondary)
-                            ForEach(Array(measured.enumerated()),id:\.offset) { _, rep in
-                                HStack {
-                                    Text(rep.countedRepNumber.map(String.init) ?? "—");Spacer()
-                                    Text(phaseSpeedText(rep.raisingMeanSpeedMPS)).frame(width:90,alignment:.trailing)
-                                    Text(phaseSpeedText(rep.loweringMeanSpeedMPS)).frame(width:90,alignment:.trailing)
-                                }.font(.caption).monospacedDigit()
-                                if let explanation=rep.speedUnavailableExplanation {
-                                    Text(explanation).font(.caption2).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                    Text("Unavailable means direction or speed could not be established. Phase time may include pauses.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
                 Text(workout.automaticRecoveryProvisional ? "Available once this set is finalized." : "No phase speed analysis for this set.")
