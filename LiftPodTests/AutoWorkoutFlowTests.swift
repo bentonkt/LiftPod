@@ -10,7 +10,7 @@ final class AutoWorkoutFlowTests: XCTestCase {
         let model = WorkoutModel(sessionDirectory: directory, historyFileURL: directory.appendingPathComponent("history.json"),
             analyzeAI: { input, _, _ in
                 requests.append(input)
-                return .init(estimatedRIR: nil, confidence: "low", notes: "Sealed set only", weakPoints: [], nextSet: nil)
+                return .init(estimatedRIR: nil, notes: "Sealed set only", weakPoints: [], nextSet: nil)
             })
         model.automaticSets = true
         let reps = cycles("merged", count: 3, start: 1)

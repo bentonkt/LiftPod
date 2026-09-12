@@ -15,7 +15,7 @@ final class ExerciseSuggestionTests: XCTestCase {
             let workout = WorkoutModel(sessionDirectory:folder,historyFileURL:folder.appendingPathComponent("history.json"),
                 analyzeAI: { input, _, _ in
                     aiRequests.append(input)
-                    return .init(estimatedRIR: nil, confidence: "low", notes: "Confirmed identity", weakPoints: [], nextSet: nil)
+                    return .init(estimatedRIR: nil, notes: "Confirmed identity", weakPoints: [], nextSet: nil)
                 })
             workout.exerciseAutoDetect = enabled
             capture.startMotion()
@@ -410,10 +410,12 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         let provider = MockMotionProvider()
         let capture = CaptureModel(provider: provider, recorder: MockRecorder())
         var sentStreams: [AISetRequest] = []
+        var editSelectionDuringAnalysis: (() -> Void)?
         let model = WorkoutModel(sessionDirectory: directory,
             historyFileURL: directory.appendingPathComponent("history.json"), analyzeAI: { input, _, _ in
                 sentStreams.append(input)
-                return AISetAdvice(estimatedRIR: 3, confidence: "low", notes: "Test stream analysis.",
+                editSelectionDuringAnalysis?()
+                return AISetAdvice(estimatedRIR: 3, notes: "Test stream analysis.",
                     weakPoints: [], nextSet: .init(loadLB: 30, reps: 10, targetRIR: 2),
                     rest: .init(seconds: 150, reason: "Recover before the heavier set."))
             })
@@ -474,6 +476,11 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertEqual(savedAI.aiAdvice?.estimatedRIR, 3)
         XCTAssertEqual(savedAI.aiAdvice?.rest?.seconds, 150)
         XCTAssertEqual(model.latestSetResult?.aiAdvice?.rest?.reason, "Recover before the heavier set.")
+        XCTAssertTrue(model.isNextSetSelected(loadLB: 30, reps: 10, rir: 2), "The coach pre-fills the editable selection automatically")
+        editSelectionDuringAnalysis = { model.prescription.loadLB = 35 }
+        await model.analyzeLatestSet(model: "", apiKey: "")
+        XCTAssertEqual(model.prescription.loadLB, 35, "A late response must not overwrite a user edit")
+        editSelectionDuringAnalysis = nil
         let source = LoggedWorkoutSet(id: UUID(), sessionID: UUID(), sourceSetID: "recommendation",
             exercise: .bicepsCurl, loadLB: 40, reps: 8, repsInReserve: 2,
             averageRepDuration: nil, performedAt: Date(), velocityProfile: nil,
@@ -484,7 +491,7 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
             action: .keep, explanation: "Keep weight and adjust target")
         XCTAssertFalse(model.isNextSetSelected(loadLB: 40, reps: 9, rir: 3))
         model.use(prediction)
-        XCTAssertTrue(model.isNextSetSelected(loadLB: 40, reps: 9, rir: 3))
+        XCTAssertTrue(model.isNextSetSelected(loadLB: 40, reps: 9, rir: 3), "Users can override prefilled targets")
         XCTAssertEqual(model.session?.prescription.maximumReps, 9)
         XCTAssertEqual(model.session?.prescription.targetRIR, 3)
         XCTAssertEqual(model.latestSetResult?.prescription.loadLB, 25)
@@ -547,6 +554,11 @@ final class WorkoutCaptureRoutingTests: XCTestCase {
         XCTAssertEqual(model.history.sets.first?.loadLB, 30)
         XCTAssertEqual(model.history.sets.first?.reps, 12)
         XCTAssertEqual(model.history.sets.first?.repsInReserve, 2)
+        XCTAssertGreaterThan(model.aiInputRevision, 0)
+        XCTAssertNil(model.latestSetResult?.aiAdvice)
+        await model.analyzeLatestSet(model: "", apiKey: "")
+        XCTAssertEqual(sentStreams.last?.completedReps, 12)
+        XCTAssertEqual(sentStreams.last?.confirmedRIR, 2)
         await capture.stopMotion()
     }
 
@@ -1096,6 +1108,40 @@ final class RIRReliabilityTests: XCTestCase {
 }
 
 final class AIWorkoutCoachTests: XCTestCase {
+    func testCoachSchemaHasNoConfidenceAndRequiresCompletedSetRIR() throws {
+        let schema = try AIWorkoutCoach.responseSchema(for: input())
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        XCTAssertNil(properties["confidence"])
+        XCTAssertFalse(try XCTUnwrap(schema["required"] as? [String]).contains("confidence"))
+        XCTAssertEqual((properties["estimatedRIR"] as? [String: Any])?["type"] as? String, "integer")
+        let legacy = Data(#"{"estimatedRIR":2,"confidence":"low","notes":"Keep the weight.","weakPoints":[],"nextSet":null}"#.utf8)
+        let advice = try JSONDecoder().decode(AISetAdvice.self, from: legacy)
+        XCTAssertEqual(advice.estimatedRIR, 2)
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(advice)) as? [String: Any])
+        XCTAssertNil(encoded["confidence"])
+    }
+
+    func testLoggedFourteenOverridesThirteenMeasuredReps() throws {
+        var request = AISetRequest(prescription: weightedPrescription(),
+            reps: (0..<13).map { index in
+                AIRepSummary(rep: .init(id: "r\(index)", start: Double(index * 2), end: Double(index * 2 + 1)), generic: nil)
+            }, speedDegradationPercent: nil, speedMeasurement: "whole-rep 3D device speed",
+            signalUsable: false, interrupted: false)
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertEqual(encoded["completedReps"] as? Int, 13, "Missing speeds do not remove reps from the total")
+        request.confirmedReps = 14
+        encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertEqual(encoded["completedReps"] as? Int, 14)
+        XCTAssertEqual(encoded["repCountSource"] as? String, "userLogged")
+        XCTAssertEqual((encoded["reps"] as? [[String: Any]])?.count, 13, "Do not invent a measurement for the corrected rep")
+        let schema = try AIWorkoutCoach.responseSchema(for: request)
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        XCTAssertEqual((properties["weakPoints"] as? [String: Any])?["maxItems"] as? Int, 0)
+        let advice = AISetAdvice(estimatedRIR: 2, notes: "Keep this weight for the next set.",
+            weakPoints: [.init(rep: 13, observation: "Slow rep", cue: "Keep lifting")], nextSet: nil)
+        XCTAssertTrue(try advice.validatedForDisplay(for: request).weakPoints.isEmpty)
+    }
+
     func testRestHasItsOwnRequiredSchemaSectionAndSurvivesDecoding() throws {
         let schema = try AIWorkoutCoach.responseSchema(for: input())
         XCTAssertTrue(try XCTUnwrap(schema["required"] as? [String]).contains("rest"))
@@ -1103,14 +1149,14 @@ final class AIWorkoutCoachTests: XCTestCase {
         let rest = try XCTUnwrap(properties["rest"] as? [String: Any])
         let object = try XCTUnwrap((rest["anyOf"] as? [[String: Any]])?.first)
         XCTAssertEqual(object["required"] as? [String], ["seconds", "reason"])
-        let advice = AISetAdvice(estimatedRIR: 2, confidence: "medium", notes: "You kept a steady pace.",
+        let advice = AISetAdvice(estimatedRIR: 2, notes: "You kept a steady pace.",
             weakPoints: [], nextSet: nil, rest: .init(seconds: 120, reason: "Recover for another steady set."))
         let decoded = try JSONDecoder().decode(AISetAdvice.self, from: JSONEncoder().encode(advice))
         XCTAssertEqual(try decoded.validatedForDisplay(for: input()).rest, advice.rest)
     }
 
     func testInvalidRestDoesNotDiscardCoachingAndOldAdviceStillLoads() throws {
-        let advice = AISetAdvice(estimatedRIR: 2, confidence: "medium", notes: "Steady pace.",
+        let advice = AISetAdvice(estimatedRIR: 2, notes: "Steady pace.",
             weakPoints: [], nextSet: nil, rest: .init(seconds: 0, reason: "No rest"))
         let displayed = try advice.validatedForDisplay(for: input())
         XCTAssertNil(displayed.rest)
@@ -1122,19 +1168,23 @@ final class AIWorkoutCoachTests: XCTestCase {
             from: JSONSerialization.data(withJSONObject: json)).rest)
     }
 
-    func testUnknownWeightAllowsNotesButDisallowsInventedLoad() throws {
+    func testUnknownWeightUsesTenPoundStartingPoint() throws {
         let measured = input()
         let request = AISetRequest(prescription: .init(), reps: measured.reps,
             speedDegradationPercent: measured.speedDegradationPercent,
             speedMeasurement: measured.speedMeasurement, signalUsable: true, interrupted: false)
         let schema = try AIWorkoutCoach.responseSchema(for: request)
         let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
-        XCTAssertEqual((properties["nextSet"] as? [String: Any])?["type"] as? String, "null")
-        let advice = AISetAdvice(estimatedRIR: 2, confidence: "low", notes: "Steady pace.",
-            weakPoints: [], nextSet: .init(loadLB: 25, reps: 10, targetRIR: 2))
+        let next = try XCTUnwrap(properties["nextSet"] as? [String: Any])
+        let object = try XCTUnwrap((next["anyOf"] as? [[String: Any]])?.first)
+        let fields = try XCTUnwrap(object["properties"] as? [String: Any])
+        XCTAssertEqual((fields["loadLB"] as? [String: Any])?["enum"] as? [Double], [5, 10, 15, 20])
+        XCTAssertEqual(request.recommendationBaseLoadLB, 10)
+        let advice = AISetAdvice(estimatedRIR: 2, notes: "Steady pace.",
+            weakPoints: [], nextSet: .init(loadLB: 10, reps: 10, targetRIR: 2))
         let displayed = try advice.validatedForDisplay(for: request)
         XCTAssertEqual(displayed.notes, "Steady pace.")
-        XCTAssertNil(displayed.nextSet)
+        XCTAssertEqual(displayed.nextSet?.loadLB, 10)
     }
 
     func testObservedOversizedRequestErrorReportsTokenCounts() throws {
@@ -1160,7 +1210,7 @@ final class AIWorkoutCoachTests: XCTestCase {
     }
 
     func testInvalidOptionalEvidenceDoesNotDiscardRIRAndNotes() throws {
-        let advice = AISetAdvice(estimatedRIR: 2, confidence: "low", notes: "Provisional RIR estimate.",
+        let advice = AISetAdvice(estimatedRIR: 2, notes: "Provisional RIR estimate.",
             weakPoints: [
                 .init(rep: 2, observation: "Invalid rep", cue: "Cue"),
                 .init(rep: 1, observation: "Slower rep", cue: "Cue")],
@@ -1183,8 +1233,9 @@ final class AIWorkoutCoachTests: XCTestCase {
         let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
         let next = try XCTUnwrap(properties["nextSet"] as? [String: Any])
         let targets = try XCTUnwrap((next["anyOf"] as? [[String: Any]])?.first?["properties"] as? [String: Any])
-        XCTAssertEqual((targets["loadLB"] as? [String: Any])?["enum"] as? [Double], [20, 25, 30])
+        XCTAssertEqual((targets["loadLB"] as? [String: Any])?["enum"] as? [Double], [20, 25, 30, 35])
         XCTAssertEqual((targets["reps"] as? [String: Any])?["maximum"] as? Int, 12)
+        XCTAssertEqual((next["anyOf"] as? [[String: Any]])?.count, 1, "Known-weight completed sets require a next-set object")
         let points = try XCTUnwrap(properties["weakPoints"] as? [String: Any])
         let items = try XCTUnwrap(points["items"] as? [String: Any])
         let fields = try XCTUnwrap(items["properties"] as? [String: Any])
@@ -1200,7 +1251,7 @@ final class AIWorkoutCoachTests: XCTestCase {
             JSONSerialization.data(withJSONObject: envelope), for: input())) { error in
                 XCTAssertTrue(error.localizedDescription.contains("output limit"))
         }
-        let invalidCore = AISetAdvice(estimatedRIR: 99, confidence: "low", notes: "Invalid RIR", weakPoints: [], nextSet: nil)
+        let invalidCore = AISetAdvice(estimatedRIR: 99, notes: "Invalid RIR", weakPoints: [], nextSet: nil)
         XCTAssertThrowsError(try invalidCore.validatedForDisplay(for: input()))
     }
 
@@ -1212,6 +1263,12 @@ final class AIWorkoutCoachTests: XCTestCase {
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
         XCTAssertEqual(body["model"] as? String, "gpt-4.1")
         XCTAssertEqual(body["store"] as? Bool, false)
+        let instructions = try XCTUnwrap(body["instructions"] as? String)
+        XCTAssertTrue(instructions.contains("Training context"))
+        XCTAssertTrue(instructions.contains("10.3389/fspor.2024.1429789"))
+        XCTAssertTrue(instructions.contains("PMID 25601394"))
+        XCTAssertTrue(instructions.contains("10.14814/phy2.15955"))
+        XCTAssertTrue(instructions.contains("PMID 40832580"))
         let sentInput = try XCTUnwrap(body["input"] as? String)
         let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(sentInput.utf8)) as? [String: Any])
         XCTAssertNil(sent["stream"])
@@ -1230,7 +1287,7 @@ final class AIWorkoutCoachTests: XCTestCase {
     }
 
     func testDirectResponseHandlesReasoningAndUnavailableRIR() throws {
-        let advice = AISetAdvice(estimatedRIR: nil, confidence: "low", notes: "Insufficient evidence.",
+        let advice = AISetAdvice(estimatedRIR: nil, notes: "Insufficient evidence.",
             weakPoints: [], nextSet: nil)
         let text = String(decoding: try JSONEncoder().encode(advice), as: UTF8.self)
         let body: [String: Any] = ["status": "completed", "output": [
@@ -1276,20 +1333,41 @@ final class AIWorkoutCoachTests: XCTestCase {
         XCTAssertNil(AIRepSummary(rep: rep, generic: metric).meanSpeedMPS)
     }
 
+    func testAllowsTenPoundIncreaseWithoutIgnoringEquipmentSteps() throws {
+        let measured = input()
+        var prescription = weightedPrescription()
+        prescription.loadLB = 10
+        let request = AISetRequest(prescription: prescription, reps: measured.reps,
+            speedDegradationPercent: 0, speedMeasurement: measured.speedMeasurement,
+            signalUsable: true, interrupted: false)
+        let advice = AISetAdvice(estimatedRIR: 5, notes: "You have room to increase the load.",
+            weakPoints: [], nextSet: .init(loadLB: 20, reps: 10, targetRIR: 2))
+        XCTAssertNoThrow(try advice.validate(for: request))
+        let tooLarge = AISetAdvice(estimatedRIR: 5, notes: advice.notes,
+            weakPoints: [], nextSet: .init(loadLB: 25, reps: 10, targetRIR: 2))
+        XCTAssertThrowsError(try tooLarge.validate(for: request))
+        prescription.equipmentIncrementLB = 2.5
+        let smallerSteps = AISetRequest(prescription: prescription, reps: measured.reps,
+            speedDegradationPercent: 0, speedMeasurement: measured.speedMeasurement,
+            signalUsable: true, interrupted: false)
+        XCTAssertEqual(smallerSteps.allowedNextSetLoads, [7.5, 10, 12.5, 15, 17.5, 20])
+        XCTAssertNoThrow(try advice.validate(for: smallerSteps))
+    }
+
     func testRejectsInventedEvidenceAndOffIncrementLoad() throws {
-        let valid = AISetAdvice(estimatedRIR: 2, confidence: "low", notes: "Provisional estimate.",
+        let valid = AISetAdvice(estimatedRIR: 2, notes: "Provisional estimate.",
             weakPoints: [.init(rep: 1, startTime: 10.5, endTime: 11,
                               observation: "Pause", cue: "Maintain your pace")],
             nextSet: .init(loadLB: 30, reps: 10, targetRIR: 2))
         XCTAssertNoThrow(try valid.validate(for: input()))
-        let outside = AISetAdvice(estimatedRIR: 2, confidence: "low", notes: "Pause.",
+        let outside = AISetAdvice(estimatedRIR: 2, notes: "Pause.",
             weakPoints: [.init(rep: 2,
                               observation: "Pause", cue: "Maintain your pace")], nextSet: nil)
         XCTAssertThrowsError(try outside.validate(for: input()))
-        let offStep = AISetAdvice(estimatedRIR: nil, confidence: "low", notes: "Uncertain.",
+        let offStep = AISetAdvice(estimatedRIR: nil, notes: "Uncertain.",
             weakPoints: [], nextSet: .init(loadLB: 27, reps: 10, targetRIR: 2))
         XCTAssertThrowsError(try offStep.validate(for: input()))
-        let unavailable = AISetAdvice(estimatedRIR: nil, confidence: "low", notes: "Insufficient evidence.", weakPoints: [], nextSet: nil)
+        let unavailable = AISetAdvice(estimatedRIR: nil, notes: "Insufficient evidence.", weakPoints: [], nextSet: nil)
         XCTAssertNoThrow(try unavailable.validate(for: input()))
     }
 
@@ -1347,7 +1425,7 @@ final class OptionalWorkoutWeightTests: XCTestCase {
         model.updateNextSet()
         XCTAssertEqual(model.prescription.loadLB, 30)
         model.prescription.exercise = .lateralRaise
-        XCTAssertNil(model.prescription.loadLB)
+        XCTAssertEqual(model.prescription.loadLB, 10)
         model.prescription.loadLB = 15
         model.prescription.exercise = .bicepsCurl
         XCTAssertEqual(model.prescription.loadLB, 30)
@@ -1356,7 +1434,7 @@ final class OptionalWorkoutWeightTests: XCTestCase {
         model.prescription.loadLB = nil
         model.prescription.exercise = .bicepsCurl
         model.prescription.exercise = .lateralRaise
-        XCTAssertNil(model.prescription.loadLB)
+        XCTAssertEqual(model.prescription.loadLB, 10)
     }
 
     func testEditingCompletedWeightDoesNotChangeUpcomingWeight() throws {
@@ -1397,5 +1475,18 @@ final class OptionalWorkoutWeightTests: XCTestCase {
         let result = WorkoutSetResult(id: UUID(), prescription: .init(), reps: 10,
             averageRepDuration: nil, movementDuration: nil, interrupted: false, finishedAt: Date())
         XCTAssertEqual(WorkoutCoach.nextSetPlan(for: result).action, .noRecommendation)
+    }
+}
+
+final class ObservedSpeedTrendTests: XCTestCase {
+    func testAvailableRepSpeedsRemainUsefulWithMissingFinalSpeed() throws {
+        XCTAssertEqual(try XCTUnwrap(ObservedSpeedTrend.degradationPercent([1, 1, 0.8, 0.6, nil])), 30, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(ObservedSpeedTrend.degradationPercent([1, nil, 0.8, 0.5])), 50, accuracy: 0.001)
+        XCTAssertEqual(ObservedSpeedTrend.degradationPercent([0.5, 0.6, 0.7]), 0)
+    }
+    func testNoInventedLossWhenTooFewValidSpeedsExist() {
+        XCTAssertNil(ObservedSpeedTrend.degradationPercent([]))
+        XCTAssertNil(ObservedSpeedTrend.degradationPercent([1, 0.5]))
+        XCTAssertNil(ObservedSpeedTrend.degradationPercent([1, .nan, .infinity, 0, -1, 0.5]))
     }
 }
