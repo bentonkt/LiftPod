@@ -3,6 +3,78 @@ import simd
 @testable import LiftPod
 
 final class GenericRepTests: XCTestCase {
+    func testRecordedSpeedCorrectionsPublishEstimatesWithoutChangingLegacyResults() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/generic-speed-corrections")
+        let data = try Data(contentsOf: root.appendingPathComponent("generic-configuration.json"))
+        let config = try JSONDecoder().decode(GenericSessionConfiguration.self, from: data)
+        XCTAssertNil(config.speedPolicy)
+        XCTAssertEqual(config.contentHash, "53d0fe77a05044f96c04e5f8c44e79e11f6f9d496b6d973cc359f8334b277256")
+        struct Summary: Decodable { let events: [GenericCycleEvent]; let metrics: [GenericCycleMetrics] }
+        let summary = try JSONDecoder().decode(Summary.self, from: Data(contentsOf: root.appendingPathComponent("summary.json")))
+        var resampler = V2StreamingResampler(), pipeline = GenericFeaturePipeline()
+        var frames: [GenericMotionFrame] = []
+        try GenericFrameHistory.lines(root.appendingPathComponent("processor-transactions.jsonl")) { data in
+            let tx = try JSONDecoder().decode(GenericSessionTransaction.self, from: data)
+            if let raw = tx.input.raw?.sample {
+                let step = try resampler.append(raw)
+                XCTAssertNil(step.discontinuity)
+                for uniform in step.samples { frames.append(try XCTUnwrap(pipeline.observe(uniform))) }
+            }
+        }
+        var estimated = 0
+        for (event, recorded) in zip(summary.events, summary.metrics) {
+            var estimator = DevicePathMetrics(configuration: config.metricsConfiguration)
+            let time = try XCTUnwrap(recorded.finalizedAt)
+            for frame in frames where frame.time >= event.startTimestamp-0.5 && frame.time <= min(time,event.completionTimestamp+0.6) {
+                estimator.observePreparedGeneric(frame)
+            }
+            let legacy = estimator.estimateGeneric(event,at:time)
+            XCTAssertEqual(legacy.status,recorded.status)
+            XCTAssertEqual(legacy.reason,recorded.reason)
+            XCTAssertNil(legacy.diagnostics)
+            XCTAssertNil(legacy.speedQuality)
+            let revised = estimator.estimateGeneric(event,at:time,policy:.qualityGradedV2)
+            XCTAssertEqual(revised.status,.available)
+            XCTAssertTrue(revised.isUsableForSlowdown)
+            XCTAssertTrue(try XCTUnwrap(revised.meanSpeed).isFinite)
+            XCTAssertTrue(try XCTUnwrap(revised.peakSpeed).isFinite)
+            XCTAssertEqual(revised.estimatorVersion,"generic-cycle-metrics-v2")
+            if recorded.status == .available {
+                XCTAssertEqual(try XCTUnwrap(revised.meanSpeed),try XCTUnwrap(recorded.meanSpeed),accuracy:1e-10)
+                XCTAssertEqual(revised.speedQuality,.trusted)
+                XCTAssertTrue(revised.isTrustedSpeed)
+            } else {
+                estimated += 1
+                XCTAssertEqual(revised.speedQuality,.estimated)
+                XCTAssertEqual(revised.reason,.excessiveEndpointCorrection)
+                XCTAssertFalse(revised.isTrustedSpeed)
+                XCTAssertEqual(revised.speedStatusLabel,"Estimated")
+                XCTAssertEqual(revised.speedPrefix,"≈")
+                XCTAssertTrue(try XCTUnwrap(revised.diagnostics).failedChecks.contains("bias"))
+            }
+        }
+        XCTAssertEqual(estimated,4)
+        XCTAssertEqual(summary.events.count,10)
+        var revisedConfig = config; revisedConfig.speedPolicy = .qualityGradedV2
+        XCTAssertNotEqual(config.contentHash,revisedConfig.contentHash)
+        XCTAssertEqual(try JSONDecoder().decode(GenericSessionConfiguration.self,from:GenericHash.data(revisedConfig)),revisedConfig)
+        let empty = DevicePathMetrics(configuration:config.metricsConfiguration).estimateGeneric(summary.events[0],at:summary.events[0].completionTimestamp+0.6,policy:.qualityGradedV2)
+        XCTAssertEqual(empty.status,.unavailable)
+        XCTAssertNil(empty.meanSpeed)
+        XCTAssertFalse(empty.isTrustedSpeed)
+        XCTAssertFalse(empty.isUsableForSlowdown)
+    }
+
+    func testNewGenericSessionsEnableQualityGradedSpeed() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("speed-policy-\(UUID())")
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let session = GenericRepSession()
+        try await session.start(side:.right,metricsEnabled:true,directory:directory)
+        let folders = try FileManager.default.contentsOfDirectory(at:directory,includingPropertiesForKeys:nil)
+        let config = try JSONDecoder().decode(GenericSessionConfiguration.self,from:Data(contentsOf:try XCTUnwrap(folders.first).appendingPathComponent("generic-configuration.json")))
+        XCTAssertEqual(config.speedPolicy,.qualityGradedV2)
+    }
+
     func testRDLRollingDiscoveryAndLegacyReplay() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/rdl-six-patterns")

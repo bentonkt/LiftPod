@@ -452,9 +452,10 @@ struct DevicePathMetrics: Sendable {
 
     /// Whole-cycle estimates do not require or manufacture a physical top.
     /// The same soft-return fit and quality gates serve both detector families.
-    func estimateGeneric(_ event: GenericCycleEvent, at time: Double) -> GenericCycleMetrics {
+    func estimateGeneric(_ event: GenericCycleEvent, at time: Double, policy: GenericSpeedPolicy? = nil) -> GenericCycleMetrics {
         var result = GenericCycleMetrics(id: event.id, learningEpoch: event.learningEpoch)
         result.finalizedAt = time
+        if let policy { result.estimatorVersion = policy.rawValue }
         func fail(_ reason: RepMetricsReason) -> GenericCycleMetrics {
             var r = result; r.status = .unavailable; r.reason = reason; return r
         }
@@ -465,9 +466,23 @@ struct DevicePathMetrics: Sendable {
         let cycle = CycleWindow(id: event.id, startTimestamp: event.startTimestamp, topTimestamp: event.turnaroundTimestamp,
                                 completionTimestamp: event.completionTimestamp, movementAxis: nil)
         guard let local = cyclicWindow(cycle, at: time), let c = settings.cyclic else { return fail(.ambiguousBoundary) }
-        guard simd_length(local.fit.bias) <= settings.maximumBiasNorm,
-              local.fit.residual <= min(settings.maximumStationaryResidual,c.maximumVelocityPeriodicityResidual),
-              simd_length(local.fit.closure ?? .zero) <= c.maximumDisplacementResidual else { return fail(.excessiveEndpointCorrection) }
+        let bias = simd_length(local.fit.bias), closure = simd_length(local.fit.closure ?? .zero)
+        let residualLimit = min(settings.maximumStationaryResidual,c.maximumVelocityPeriodicityResidual)
+        let correctionFailed = bias > settings.maximumBiasNorm || local.fit.residual > residualLimit || closure > c.maximumDisplacementResidual
+        if policy != nil {
+            guard [bias, closure, local.fit.residual, local.fit.uncertainty].allSatisfy(\.isFinite),
+                  local.fit.velocity.allSatisfy({ [$0.x,$0.y,$0.z].allSatisfy(\.isFinite) }) else { return fail(.invalidInterval) }
+            var failures: [String] = []
+            if bias > settings.maximumBiasNorm { failures.append("bias") }
+            if local.fit.residual > residualLimit { failures.append("velocityPeriodicity") }
+            if closure > c.maximumDisplacementResidual { failures.append("displacement") }
+            result.diagnostics = .init(biasNorm: bias, velocityPeriodicityResidual: local.fit.residual,
+                displacementResidual: closure, velocityUncertainty: local.fit.uncertainty, failedChecks: failures)
+            // V2 permits bounded correction overruns, still requiring closure,
+            // observable motion and independently stable integration boundaries.
+            guard bias <= 2*settings.maximumBiasNorm, local.fit.residual <= 2*residualLimit,
+                  closure <= c.maximumDisplacementResidual else { return fail(.excessiveEndpointCorrection) }
+        } else if correctionFailed { return fail(.excessiveEndpointCorrection) }
         guard local.fit.uncertainty <= settings.maximumVelocityNormStandardDeviation else { return fail(.excessiveUncertainty) }
         func speeds(_ fit: Fit, _ window: [Frame], from start: Double, to end: Double, vertical: Bool = false) -> (Double,Double)? {
             let indices = window.indices.filter { window[$0].time >= start && window[$0].time <= end }
@@ -481,13 +496,22 @@ struct DevicePathMetrics: Sendable {
         }
         guard let speed = speeds(local.fit,local.window,from:event.startTimestamp,to:event.completionTimestamp),
               speed.1 >= settings.minimumPeakToUncertaintyRatio*local.fit.uncertainty else { return fail(.excessiveUncertainty) }
+        var meanBoundaryChange = 0.0, peakBoundaryChange = 0.0
         for ds in [-0.04,0,0.04] {
             for de in [-0.04,0,0.04] where ds != 0 || de != 0 {
                 guard let shifted = cyclicWindow(cycle,at:time,startShift:ds,endShift:de),
                       let other = speeds(shifted.fit,shifted.window,from:event.startTimestamp+ds,to:event.completionTimestamp+de),
                       abs(speed.0-other.0) <= max(0.10,speed.0*0.15),
                       abs(speed.1-other.1) <= max(0.10,speed.1*0.15) else { return fail(.ambiguousBoundary) }
+                meanBoundaryChange = max(meanBoundaryChange,abs(speed.0-other.0))
+                peakBoundaryChange = max(peakBoundaryChange,abs(speed.1-other.1))
             }
+        }
+        if policy != nil {
+            result.speedQuality = correctionFailed ? .estimated : .trusted
+            result.reason = correctionFailed ? .excessiveEndpointCorrection : nil
+            result.diagnostics?.maximumMeanBoundaryChange = meanBoundaryChange
+            result.diagnostics?.maximumPeakBoundaryChange = peakBoundaryChange
         }
         result.meanSpeed = speed.0; result.peakSpeed = speed.1
         let vertical = speeds(local.fit,local.window,from:event.startTimestamp,to:event.completionTimestamp,vertical:true)

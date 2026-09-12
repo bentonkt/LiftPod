@@ -151,16 +151,19 @@ struct ExperimentalV2SignalLabView: View {
                 row("Learning epoch", String(generic.learningEpoch + 1))
                 row("Template", generic.templateHash.map { String($0.prefix(16)) } ?? "Learning…")
                 if let rep = generic.metrics.last {
-                    row("Speed status", rep.status.rawValue.capitalized)
-                    row("Whole-cycle mean / peak", "\(metricNumber(rep.meanSpeed)) / \(metricNumber(rep.peakSpeed)) m/s")
+                    row("Speed status", rep.speedStatusLabel)
+                    row("Whole-cycle mean / peak", "\(rep.speedPrefix)\(metricNumber(rep.meanSpeed)) / \(rep.speedPrefix)\(metricNumber(rep.peakSpeed)) m/s")
                     row("Vertical magnitude mean / peak", "\(metricNumber(rep.meanVerticalSpeed)) / \(metricNumber(rep.peakVerticalSpeed)) m/s")
                     row("Outward / return duration", "\(metricNumber(rep.outwardDuration)) / \(metricNumber(rep.returnDuration)) s")
                     row("Turnaround / preceding pause", "\(metricNumber(rep.turnaroundPause)) / \(metricNumber(rep.precedingPause)) s")
                     row("Tempo: outward–pause–return–pause", "\(metricNumber(rep.outwardDuration))–\(metricNumber(rep.turnaroundPause))–\(metricNumber(rep.returnDuration))–\(metricNumber(rep.precedingPause))")
-                    if let baseline = generic.baselineMeanSpeed, let speed = rep.meanSpeed, rep.learningEpoch == generic.learningEpoch {
+                    if rep.isUsableForSlowdown, let baseline = generic.baselineMeanSpeed, let speed = rep.meanSpeed, rep.learningEpoch == generic.learningEpoch {
                         row("Slowdown vs first 3 in this pattern", String(format:"%+.0f%%",100*(1-speed/baseline)))
                     }
-                    if let reason = rep.reason { Text(metricsExplanation(reason)).font(.caption).foregroundStyle(.secondary) }
+                    if rep.speedQuality == .estimated {
+                        Text("Approximate speed: motion correction exceeded the normal quality limit. Included in slowdown calculations.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if let reason = rep.reason { Text(metricsExplanation(reason)).font(.caption).foregroundStyle(.secondary) }
                 }
                 Text("Speed assumes approximately in-place periodic motion. Pattern phase is not a physical turnaround; unsupported phase metrics remain unavailable.")
                     .font(.caption).foregroundStyle(.secondary)

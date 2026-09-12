@@ -124,6 +124,19 @@ struct GenericRepSnapshot: Codable, Equatable, Sendable {
     var baselineMeanSpeed: Double?
 }
 
+enum GenericSpeedPolicy: String, Codable, Sendable { case qualityGradedV2 = "generic-cycle-metrics-v2" }
+enum GenericSpeedQuality: String, Codable, Sendable { case trusted, estimated }
+
+struct GenericSpeedDiagnostics: Codable, Equatable, Sendable {
+    let biasNorm: Double
+    let velocityPeriodicityResidual: Double
+    let displacementResidual: Double
+    let velocityUncertainty: Double
+    let failedChecks: [String]
+    var maximumMeanBoundaryChange: Double?
+    var maximumPeakBoundaryChange: Double?
+}
+
 struct GenericCycleMetrics: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let learningEpoch: Int
@@ -141,4 +154,10 @@ struct GenericCycleMetrics: Codable, Equatable, Identifiable, Sendable {
     var precedingPause: Double?
     var finalizedAt: Double?
     var estimatorVersion = "generic-cycle-metrics-v1"
+    var speedQuality: GenericSpeedQuality?
+    var diagnostics: GenericSpeedDiagnostics?
+    var isTrustedSpeed: Bool { status == .available && (speedQuality == nil || speedQuality == .trusted) }
+    var isUsableForSlowdown: Bool { status == .available && meanSpeed.map { $0.isFinite && $0 > 0 } == true }
+    var speedStatusLabel: String { speedQuality == .estimated ? "Estimated" : status.rawValue.capitalized }
+    var speedPrefix: String { speedQuality == .estimated ? "≈" : "" }
 }

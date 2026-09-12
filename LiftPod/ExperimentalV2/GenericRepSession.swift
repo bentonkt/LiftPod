@@ -9,6 +9,8 @@ struct GenericSessionConfiguration: Codable, Equatable, Sendable {
     let detector: GenericRepConfiguration
     let metricsEnabled: Bool
     var metricsConfiguration: RepMetricsConfiguration = .cyclicDevicePath3D
+    // Absent in old recordings: preserve legacy output and configuration hashes.
+    var speedPolicy: GenericSpeedPolicy? = nil
     var contentHash: String { GenericHash.of(self) }
 }
 
@@ -112,7 +114,7 @@ struct GenericRepProcessor: Sendable {
             phase: detector.phase, candidateCount: detector.candidateCount,
             events: Array(events.suffix(12)), metrics: Array(metrics.suffix(12)), detail: detail)
         if state == .complete, events.isEmpty { generic.detail = "Pattern not established: three matching cycles are required." }
-        let eligible = metrics.filter { $0.learningEpoch == detector.learningEpoch && $0.status == .available }
+        let eligible = metrics.filter { $0.learningEpoch == detector.learningEpoch && $0.isUsableForSlowdown }
             .compactMap(\.meanSpeed).filter { $0 >= 0.05 }.prefix(3)
         if eligible.count == 3 { generic.baselineMeanSpeed = eligible.reduce(0,+)/3 }
         return .init(ingestSequence: sequence-1, setState: state, quality: quality,
@@ -249,7 +251,7 @@ struct GenericRepProcessor: Sendable {
             try history.scan(from: event.startTimestamp-0.50, through: min(time,event.completionTimestamp+0.60)) { frame in
                 if frame.sample.epoch == event.sourceEpoch { estimator.observePreparedGeneric(frame) }
             }
-            metrics[i] = estimator.estimateGeneric(event, at: time)
+            metrics[i] = estimator.estimateGeneric(event, at: time, policy: configuration.speedPolicy)
         }
     }
 
@@ -274,7 +276,7 @@ actor GenericRepSession {
 
     func start(side: ExperimentalSensorSide, metricsEnabled: Bool, directory: URL? = nil) throws {
         guard processor == nil || processor?.state == .complete || processor?.state == .interrupted else { throw V2Error.invalidLifecycle("generic set already active") }
-        let config = GenericSessionConfiguration(setID: UUID(), sensorSide: side, detector: .init(), metricsEnabled: metricsEnabled)
+        let config = GenericSessionConfiguration(setID: UUID(), sensorSide: side, detector: .init(), metricsEnabled: metricsEnabled, speedPolicy: .qualityGradedV2)
         let root = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ExperimentalV2Sessions")
         let folder = root.appendingPathComponent("generic-v8-\(config.setID.uuidString)")
