@@ -29,9 +29,10 @@ enum GenericPatternMath {
         for g in 0..<3 where pattern.activeGroups[g] {
             var d = 0.0
             for c in (g*3)..<(g*3+3) { d += pow((a[c]-b[c])/pattern.scales[g], 2) }
-            sum += d / 3; groups += 1
+            let weight = pattern.groupWeights?[g] ?? 1
+            sum += weight * d / 3; groups += weight
         }
-        return sum / max(1, groups)
+        return sum / max(1e-9, groups)
     }
 
     /// Independent generic score: one ordered path, no magnitude folding or
@@ -113,7 +114,12 @@ struct GenericPatternTracker: Sendable {
             for step in 0...min(3,j) {
                 guard var old = cells[j-step], t-old.start <= config.maximumCycleDuration else { continue }
                 var increment = 0.0
-                for k in (j-step)...j { increment += distances[k]; old.coverage |= UInt64(1) << k }
+                for k in (j-step)...j {
+                    increment += distances[k]
+                    if config.version == "generic-pattern-v1" || distances[k] <= config.maximumMatchCost * 3 {
+                        old.coverage |= UInt64(1) << k
+                    }
+                }
                 old.cost += increment; old.weight += step+1; old.samples += 1
                 if best == nil || old.cost / Double(old.weight) < best!.cost / Double(best!.weight) { best = old }
             }
@@ -138,7 +144,7 @@ struct GenericPatternTracker: Sendable {
             }
         }
         if pending == nil, let end = cells[63], end.coverage == UInt64.max,
-           t-end.start >= max(config.minimumCycleDuration, pattern.duration * 0.55),
+           t-end.start >= max(config.minimumCycleDuration, pattern.duration * (config.version == "generic-pattern-v2" ? 0.75 : 0.55)),
            end.cost / Double(end.weight) <= config.maximumMatchCost,
            endpoint <= config.maximumEndpointCost {
             pending = .init(start: end.start, completion: t, detected: t, cost: end.cost / Double(end.weight))
@@ -213,7 +219,8 @@ struct GenericCycleDetector: Sendable {
         if frame.moving, departureAllowed { searchStart = searchStart ?? frame.time }
         for i in trials.indices where trials[i].validated == nil {
             if let result = trials[i].tracker.observe(frame, departureAllowed: departureAllowed),
-               result.start >= trials[i].thirdStart - 0.20 {
+               result.start >= trials[i].thirdStart - 0.20,
+               configuration.version == "generic-pattern-v1" || result.start <= trials[i].thirdStart + 0.20 {
                 trials[i].validated = result
             }
         }
@@ -241,7 +248,8 @@ struct GenericCycleDetector: Sendable {
                     if pattern != nil { learningEpoch += 1; epochStart = p.learnedFrom.first }
                     let frozen = GenericPattern(frames: p.frames, scales: p.scales, activeGroups: p.activeGroups,
                         duration: p.duration, sourceEpoch: p.sourceEpoch, learningEpoch: learningEpoch,
-                        learnedFrom: p.learnedFrom + [winner.validated!.completion], frozenAt: frame.time)
+                        learnedFrom: p.learnedFrom + [winner.validated!.completion], frozenAt: frame.time,
+                        groupWeights: p.groupWeights)
                     pattern = frozen; tracker = .init(pattern: frozen, config: configuration)
                     state = .tracking; trials.removeAll()
                     latestDecision = .init(timestamp: frame.time, kind: "templateFrozen", learningEpoch: learningEpoch, pattern: frozen)
@@ -283,7 +291,100 @@ struct GenericCycleDetector: Sendable {
         return GenericPatternMath.cost(values, pattern: b)
     }
 
+    /// Locally centered recurrence: quiet tails cannot correlate merely because
+    /// they share an offset from an earlier moving window's mean.
+    private func recurrence(_ a: [GenericMotionFrame], _ b: [GenericMotionFrame], group: Int) -> Double {
+        guard a.count == b.count, !a.isEmpty else { return -1 }
+        var dot = 0.0, aa = 0.0, bb = 0.0
+        for c in group*3..<(group*3+3) {
+            let am = a.reduce(0) { $0 + $1.features[c] } / Double(a.count)
+            let bm = b.reduce(0) { $0 + $1.features[c] } / Double(b.count)
+            for i in a.indices {
+                let av = a[i].features[c]-am, bv = b[i].features[c]-bm
+                dot += av*bv; aa += av*av; bb += bv*bv
+            }
+        }
+        let floor = configuration.noiseFloors[group]
+        guard min(aa,bb) / Double(a.count*3) >= floor*floor else { return -1 }
+        return dot / max(1e-9,sqrt(aa*bb))
+    }
+
+    private func repeatablePair(_ a: [GenericMotionFrame], _ b: [GenericMotionFrame], at time: Double) -> (GenericPattern, Double)? {
+        guard var pa = GenericPatternMath.pattern(a, config: configuration, epoch: learningEpoch,
+                frozenAt: time, learnedFrom: [a[0].time,b[0].time,b.last!.time]),
+              var pb = GenericPatternMath.pattern(b, config: configuration, epoch: learningEpoch,
+                frozenAt: time, learnedFrom: [a[0].time,b[0].time,b.last!.time]) else { return nil }
+        var weights = [Double](repeating: 0, count: 3)
+        for g in 0..<3 where pa.activeGroups[g] && pb.activeGroups[g] {
+            var one = [Double](repeating: 0, count: 3); one[g] = 1
+            pa.groupWeights = one; pb.groupWeights = one
+            let error = max(GenericPatternMath.cost(pb.frames, pattern: pa), GenericPatternMath.cost(pa.frames, pattern: pb))
+            // Agreement is measured without candidate amplitude normalization.
+            // All supported groups subsequently share ONE ordered alignment.
+            weights[g] = max(0, 1-error/configuration.maximumMatchCost)
+        }
+        guard weights.max() ?? 0 > 0 else { return nil }
+        pa.groupWeights = weights; pb.groupWeights = weights
+        let ab = GenericPatternMath.cost(pb.frames, pattern: pa)
+        let ba = GenericPatternMath.cost(pa.frames, pattern: pb)
+        guard max(ab,ba) <= configuration.maximumMatchCost else { return nil }
+        let chosen = ab <= ba ? pa : pb
+        guard GenericPatternMath.distance(chosen.frames[0], chosen.frames[63], pattern: chosen) <= configuration.maximumEndpointCost else { return nil }
+        return (chosen,min(ab,ba))
+    }
+
+    private mutating func discoverRolling(at time: Double) {
+        guard trials.count < 4 else { return }
+        let owned = history.filter { $0.time >= max(epochStart ?? 0, searchStart ?? 0) }
+        let sparse = stride(from: 0, to: owned.count, by: 5).map { owned[$0] }
+        let maxLag = min(80,(sparse.count-1)/2)
+        guard maxLag >= 7 else { return }
+        var scores: [(lag: Int, value: Double)] = []
+        for lag in 7...maxLag {
+            let end = sparse.count-1, middle = end-lag, start = middle-lag
+            let a = Array(sparse[start..<middle]), b = Array(sparse[middle..<end])
+            let score = (0..<3).map { recurrence(a,b,group:$0) }.max() ?? -1
+            scores.append((lag,score))
+        }
+        let peaks = scores.indices.filter { i in
+            scores[i].value >= configuration.minimumCorrelation &&
+            (i == 0 || scores[i].value > scores[i-1].value) &&
+            (i == scores.count-1 ? scores[i].lag == 80 : scores[i].value >= scores[i+1].value)
+        }.sorted {
+            if scores[$0].value == scores[$1].value { return scores[$0].lag < scores[$1].lag }
+            return scores[$0].value > scores[$1].value
+        }
+        // At most two periods × three split refinements per discovery tick.
+        // Rolling endpoints naturally examine new phase offsets every 200 ms.
+        for index in peaks.prefix(2) {
+            let length = scores[index].lag*5
+            let end = owned.count-1, start = end-2*length
+            guard start >= 0 else { continue }
+            if trials.contains(where: { abs($0.pattern.duration-Double(length)/50) < 0.15 }) { continue }
+            var best: (GenericPattern,Double)?
+            for offset in [0,-5,5] {
+                let middle = end-length+offset
+                guard middle-start >= 35, end-middle >= 35,
+                      middle-start <= 400, end-middle <= 400 else { continue }
+                if let candidate = repeatablePair(Array(owned[start...middle]),Array(owned[middle...end]),at:time),
+                   best == nil || candidate.1 < best!.1 { best = candidate }
+            }
+            guard let (pattern,cost) = best else { continue }
+            var trial = Trial(pattern:pattern,firstTwoCost:cost,thirdStart:time,
+                tracker:.init(pattern:pattern,config:configuration))
+            // Freeze before observing the third cycle. Never select a favorable
+            // historical third snippet to validate a newly fitted pair.
+            _ = trial.tracker.observe(owned[end],departureAllowed:true)
+            trials.append(trial)
+            if trials.count >= 4 { break }
+        }
+    }
+
     private mutating func discover(at time: Double) {
+        if configuration.version == "generic-pattern-v2" {
+            discoverRolling(at: time)
+            return
+        }
         guard trials.count < 4 else { return }
         let owned = history.filter { $0.time >= max(epochStart ?? 0, searchStart ?? 0) }
         // 10 Hz discovery; full 50 Hz frames are used for alignment/tracking.

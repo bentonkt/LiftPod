@@ -10,7 +10,7 @@ enum RepCountingMode: String, CaseIterable, Identifiable, Sendable {
 /// Engineering defaults, deliberately independent of the legacy template score.
 /// No configuration is promoted by the app; physical validation is still required.
 struct GenericRepConfiguration: Codable, Equatable, Sendable {
-    var version = "generic-pattern-v1"
+    var version = "generic-pattern-v2"
     var sampleRate = 50.0
     var historyDuration = 32.0
     var discoveryInterval = 0.20
@@ -27,7 +27,7 @@ struct GenericRepConfiguration: Codable, Equatable, Sendable {
 
     var contentHash: String { GenericHash.of(self) }
     func validated() throws -> Self {
-        guard version == "generic-pattern-v1", sampleRate == 50, historyDuration == 32,
+        guard ["generic-pattern-v1", "generic-pattern-v2"].contains(version), sampleRate == 50, historyDuration == 32,
               discoveryInterval == 0.20, minimumCycleDuration == 0.70, maximumCycleDuration == 8,
               noiseFloors.count == 3, noiseFloors.allSatisfy({ $0.isFinite && $0 > 0 }),
               [minimumCorrelation, maximumMatchCost, maximumEndpointCost, ambiguityMargin,
@@ -85,6 +85,7 @@ struct GenericPattern: Codable, Equatable, Sendable {
     let learningEpoch: Int
     let learnedFrom: [Double]
     let frozenAt: Double
+    var groupWeights: [Double]? = nil
     var contentHash: String { GenericHash.of(self) }
 }
 
