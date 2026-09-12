@@ -159,10 +159,10 @@ final class GenericRepTests: XCTestCase {
         XCTAssertFalse(try GenericReplayVerifier().verify(directory:urls.directory).passed)
     }
 
-    @MainActor func testGenericModeIsExplicitAndCanStartWithoutProfile() {
+    @MainActor func testGenericModeIsDefaultAndCanStartWithoutProfile() {
         let model = ExperimentalV2Model(preferences:UserDefaults(suiteName:"generic-default-test")!)
-        XCTAssertEqual(model.countingMode,.exercise)
-        model.countingMode = .generic; model.selectedExercise = .overheadPress; model.setupConfirmed = true
+        XCTAssertEqual(model.countingMode,.generic)
+        model.selectedExercise = .overheadPress; model.setupConfirmed = true
         XCTAssertTrue(model.canStart(motionActive:true,sideVerified:true,otherRecordingActive:false))
     }
 

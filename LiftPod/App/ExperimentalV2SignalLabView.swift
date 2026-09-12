@@ -49,10 +49,8 @@ struct ExperimentalV2SignalLabView: View {
             Picker("Counting mode", selection: $model.countingMode) {
                 ForEach(RepCountingMode.allCases) { Text($0.rawValue).tag($0) }
             }
-            if model.countingMode == .exercise {
             Picker("Exercise", selection: $model.selectedExercise) {
                 ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
-            }
             }
             Picker("Expected AirPod", selection: $model.selectedSide) {
                 ForEach(ExperimentalSensorSide.allCases) { Text($0.rawValue.capitalized).tag($0) }

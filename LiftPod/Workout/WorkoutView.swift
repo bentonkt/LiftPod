@@ -139,7 +139,7 @@ struct WorkoutView: View {
             Button { showingSetup = true } label: {
                 VStack(spacing: 6) {
                     Text(workout.prescription.exercise.rawValue).font(.subheadline.weight(.semibold))
-                    Text("\(workout.prescription.loadLB.formatted()) lb · \(workout.prescription.minimumReps)–\(workout.prescription.maximumReps) reps")
+                    Text("\(workout.prescription.loadLB.formatted()) lb · \(workout.prescription.minimumReps)–\(workout.prescription.maximumReps) reps · \(workout.prescription.targetRIR) RIR")
                         .font(.footnote).foregroundStyle(.secondary)
                     Label("Workout setup", systemImage: "slider.horizontal.3").font(.footnote)
                 }.frame(maxWidth: .infinity).padding(18).glass(radius: 22)
@@ -171,17 +171,24 @@ struct WorkoutView: View {
                         HStack(spacing: 8) {
                             Text("Rest · \(clock(workout.sourceTime - rest))")
                             if let recommendation = workout.restRecommendation {
-                                Text("Suggested \(clock(Double(recommendation.seconds)))")
-                                    .fontWeight(.semibold).foregroundStyle(LiftStyle.blue)
-                                    .padding(.horizontal, 9).padding(.vertical, 5)
-                                    .background(LiftStyle.blue.opacity(0.11), in: Capsule())
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("Suggested \(clock(Double(recommendation.seconds)))")
+                                        .fontWeight(.semibold).foregroundStyle(LiftStyle.blue)
+                                        .padding(.horizontal, 9).padding(.vertical, 5)
+                                        .background(LiftStyle.blue.opacity(0.11), in: Capsule())
+                                    Text(recommendation.explanation)
+                                        .font(.caption2)
+                                }
                             } else if !workout.pendingSetReviews.isEmpty {
-                                Text("Confirm RIR for rest target").font(.footnote)
+                                Text("Review set for RIR").font(.footnote)
                             }
                         }.monospacedDigit()
                     }
                 }
             }.font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if workout.session?.current == nil, let prediction = workout.loadPrediction() {
+                nextSetCard(prediction)
+            }
             if workout.session?.current == nil && workout.state == .active {
                 Button("Adjust next set") { showingSetup = true }.font(.subheadline)
             }
@@ -269,12 +276,26 @@ struct WorkoutView: View {
         NavigationStack {
             Form {
                 Section("Workout") {
+                    Picker("Counting", selection: $workout.countingMode) {
+                        Text("Generic movement").tag(RepCountingMode.generic)
+                        Text("Exercise profile").tag(RepCountingMode.exercise)
+                    }.disabled(workout.isRunning)
                     Picker("Exercise", selection: $workout.prescription.exercise) {
                         ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
                     }.disabled(workout.isRunning)
-                    if !workout.supportedExercise { Text("This exercise profile is not available yet.").foregroundStyle(.secondary) }
+                    if workout.countingMode == .exercise {
+                        if let profile = workout.selectedProfile {
+                            LabeledContent("Profile", value: profile.profileID)
+                        } else {
+                            Text("No bundled profile for this exercise. Select Generic movement.")
+                                .foregroundStyle(.orange)
+                        }
+                    }
                     Picker("Goal", selection: $workout.prescription.goal) {
                         ForEach(TrainingGoal.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    Button("Apply \(workout.prescription.goal.rawValue.lowercased()) defaults") {
+                        workout.applyGoalDefaults()
                     }
                     HStack {
                         Text("Load (lb)")
@@ -283,28 +304,40 @@ struct WorkoutView: View {
                     }
                     Stepper("Minimum reps: \(workout.prescription.minimumReps)", value: $workout.prescription.minimumReps, in: 1...workout.prescription.maximumReps)
                     Stepper("Maximum reps: \(workout.prescription.maximumReps)", value: $workout.prescription.maximumReps, in: workout.prescription.minimumReps...100)
+                    Stepper("Target RIR: \(workout.prescription.targetRIR)", value: $workout.prescription.targetRIR, in: 0...4)
+                    Picker("Weight increment", selection: $workout.prescription.equipmentIncrementLB) {
+                        Text("2.5 lb").tag(2.5)
+                        Text("5 lb").tag(5.0)
+                        Text("10 lb").tag(10.0)
+                    }
                 }
                 if !workout.isRunning {
                     Section("Mount") {
                         Toggle("Right AirPod and mount confirmed", isOn: $workout.mountConfirmed)
-                        Text("Use the tested curl mounting orientation. Exercise selection is manual.").font(.footnote)
+                        Text(workout.countingMode == .generic
+                             ? "Use a secure, consistent mounting orientation. Generic movement learns the repeated motion within each set."
+                             : "Use the tested mounting orientation for the selected exercise profile.")
+                            .font(.footnote)
                     }
                     Section { Button("Open diagnostics") { diagnosticsPending = true; showingSetup = false } }
                 }
                 Section {
-                    Text("Sets end after 12 seconds without a completed rep. Goals and targets are recorded only.")
+                    Text("Sets end after 12 seconds without a completed rep. RIR and available weight increments drive the next-set recommendation.")
                     if !workout.prescription.isValid { Text("Enter a load from 0 to 1,000 lb and a valid rep range.").foregroundStyle(.orange) }
                 }.font(.footnote)
                 if let prediction = workout.loadPrediction() {
-                    Section("Load estimate") {
+                    Section("Optimized next set") {
                         Text("\(prediction.source.loadLB.formatted()) lb × \(prediction.source.reps)" +
                              (prediction.source.repsInReserve.map { " @ \($0) RIR" } ?? ""))
-                        Button("Use estimated \(prediction.loadLB.formatted()) lb") {
-                            workout.prescription.loadLB = prediction.loadLB
-                        }
-                        Text("\(prediction.confidence.rawValue) from \(prediction.sourceCount) confirmed " +
-                             (prediction.sourceCount == 1 ? "set" : "sets") +
-                             ". Uses a public-data load curve with reps + RIR. Always verify the load.")
+                        Button("Use \(prediction.loadLB.formatted()) lb × \(prediction.targetReps)") {
+                            workout.use(prediction)
+                        }.disabled(prediction.loadLB == workout.prescription.loadLB)
+                        Text("Target \(prediction.targetRIR) RIR · \(prediction.action.rawValue) load")
+                            .font(.subheadline.weight(.semibold))
+                        Text(prediction.explanation)
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("\(prediction.confidence.rawValue) from \(prediction.sourceCount) comparable " +
+                             (prediction.sourceCount == 1 ? "set" : "sets") + ". Recommendation is limited to one equipment step.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -347,7 +380,7 @@ struct WorkoutView: View {
         if capture.recordingActive { return "Stop raw recording in diagnostics to begin." }
         if !capture.monitoringActive { return "Connect your AirPod to begin." }
         if liveSensor == .leftHeadphone {
-            return "Motion is coming from the left AirPod. This curl profile needs the right AirPod. Put the left AirPod in its case, then reconnect motion."
+            return "Motion is coming from the left AirPod. Workout counting is using the right AirPod. Put the left AirPod in its case, then reconnect motion."
         }
         if let sensor = liveSensor, sensor != .rightHeadphone {
             return "Motion is arriving, but iOS has not identified the AirPod side. Reconnect the right AirPod."
@@ -366,6 +399,32 @@ struct WorkoutView: View {
     }
     private func metric(_ name: String, _ value: String) -> some View {
         HStack { Text(name).foregroundStyle(.secondary); Spacer(); Text(value).fontWeight(.medium).monospacedDigit() }.font(.system(size: 15))
+    }
+    private func nextSetCard(_ prediction: LoadPrediction) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("OPTIMIZED NEXT SET")
+                .font(.caption.weight(.semibold)).tracking(1.4).foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(prediction.loadLB.formatted()) lb × \(prediction.targetReps)")
+                    .font(.system(size: 26, weight: .semibold)).monospacedDigit()
+                Spacer()
+                Text("\(prediction.targetRIR) RIR")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(LiftStyle.blue)
+            }
+            Text(prediction.explanation).font(.footnote).foregroundStyle(.secondary)
+            HStack {
+                Text(prediction.confidence.rawValue).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button(prediction.loadLB == workout.prescription.loadLB ? "Selected" : "Use for next set") {
+                    workout.use(prediction)
+                }
+                .font(.subheadline.weight(.semibold))
+                .disabled(prediction.loadLB == workout.prescription.loadLB)
+            }
+        }
+        .padding(18).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 22)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("optimized-next-set")
     }
     private func clock(_ seconds: Double) -> String {
         let value = seconds.isFinite ? max(0, Int(seconds)) : 0
@@ -386,7 +445,7 @@ private struct SetReviewView: View {
         self.confirm = confirm
         _loadLB = State(initialValue: draft.loadLB)
         _reps = State(initialValue: draft.detectedReps)
-        _repsInReserve = State(initialValue: nil)
+        _repsInReserve = State(initialValue: draft.automaticRIR?.repsInReserve)
     }
 
     private var valid: Bool {
@@ -414,7 +473,29 @@ private struct SetReviewView: View {
                         Text("Not entered").tag(Int?.none)
                         ForEach(0...10, id: \.self) { Text("\($0)").tag(Int?.some($0)) }
                     }
-                    Text("RIR means how many more good reps you believe you could have completed. It improves future load and suggested-rest estimates.")
+                    if let estimate = draft.automaticRIR {
+                        LabeledContent("Automatic RIR",
+                            value: estimate.cappedAtFourPlus ? "4+" : "\(estimate.repsInReserve)")
+                        LabeledContent("Rep speed loss",
+                            value: "\(estimate.velocityLossPercent.formatted(.number.precision(.fractionLength(0))))%")
+                        LabeledContent("Model", value: estimate.method.rawValue)
+                        Text("\(estimate.confidence.rawValue). Based on \(estimate.measuredRepCount) finalized rep speeds" +
+                             (estimate.calibrationSetCount > 0 ? " and \(estimate.calibrationSetCount) corrected sets." : ". Correct it when needed so the personal model can learn."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Automatic RIR needs finalized speed data for at least three reps, including the last rep. Enter RIR if speed quality was insufficient.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let rir = repsInReserve,
+                       let rest = RestRecommendation(
+                           reps: reps, repsInReserve: min(4, rir),
+                           velocityLossPercent: reps == draft.detectedReps
+                               ? draft.velocityProfile?.velocityLossPercent : nil
+                       ) {
+                        LabeledContent("Suggested rest", value: restClock(rest.seconds))
+                        Text(rest.explanation).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("RIR means how many more good reps you believe you could have completed. The confirmed value drives suggested rest and future load estimates.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
@@ -428,6 +509,10 @@ private struct SetReviewView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Later") { dismiss() } } }
         }.tint(LiftStyle.blue)
+    }
+
+    private func restClock(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 
