@@ -177,8 +177,9 @@ final class StreamRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testLabDefaultsToAdaptiveV6() {
+    func testLabDefaultsToGenericWhileKeepingAdaptiveV6Available() {
         let model = ExperimentalV2Model()
+        XCTAssertEqual(model.countingMode, .generic)
         XCTAssertEqual(model.selectedAlgorithm, .adaptiveAxis)
         XCTAssertEqual(model.profile?.contentHash, V2DSPProfile.adaptiveCurlV6.contentHash)
     }

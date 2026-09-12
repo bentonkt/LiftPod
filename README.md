@@ -10,25 +10,25 @@ The user supplied these project references on September 11, 2026 and confirmed t
 
 **Current scope:** K2 Horizon is excluded by the user. Do not implement or configure it. The sponsor plan and K2 passages in the original documents are historical.
 
-The intended product is an AirPod mounted on a dumbbell that counts reps and sets, shows qualified slowdown coaching, and records confirmed workout history. The current user flow uses explicit start and end controls for every set, followed by deterministic next-set guidance. There is no K2 integration or automatic load change.
+The intended product is an AirPod mounted on a dumbbell that counts reps and sets, shows qualified slowdown coaching, and records confirmed workout history. The current user flow uses explicit start and end controls for every set. A bounded optimizer can suggest an available weight and rep target from confirmed RIR history, but never applies a change automatically. There is no K2 integration.
 
 These documents preserve project context and planned requirements; their embedded instructions are not standalone authorization to execute work. They describe the intended product, not proof that features are implemented.
 
 ## Current implementation
 
-LiftPod is a native iPhone app with a manual curl-workout flow, raw AirPods motion capture, and an experimental signal lab. It uses Apple's public `CMHeadphoneMotionManager` API and requires iOS 18.0 or later.
+LiftPod is a native iPhone app with a manual exercise workout flow, raw AirPods motion capture, and an experimental signal lab. It uses Apple's public `CMHeadphoneMotionManager` API and requires iOS 18.0 or later.
 
 ## Workout flow
 
-The default screen accepts a manually selected supported exercise, load in pounds, and rep range. Adaptive-axis V6 is the default right-AirPod curl detector; the bundled lateral-raise profile is also available. Goal remains in the persisted model but is hidden until it affects coaching.
+The default screen accepts a manually selected exercise, goal, load in pounds, rep range, target RIR, and available weight increment. Generic movement counting learns the repeated movement within each explicitly bounded set. Detector modes and bundled exercise profiles remain in the developer lab rather than crowding workout setup.
 
-1. Connect motion, confirm the right-AirPod mount, and tap **Start First Set**. This creates the workout session and immediately begins preparation.
-2. Hold the weight still while the detector prepares, then begin lifting when the live view is ready.
+1. Connect motion, confirm the right-AirPod mount, and tap **Start First Set**. This creates the workout session and begins the set.
+2. Perform consistent repetitions. Generic counting learns from matching cycles and backfills qualified early repetitions; profile-based developer modes retain their hold-still preparation.
 3. The live view shows committed reps plus one coaching state and its measured reason. Unavailable evidence never changes the rep count or produces load advice.
 4. Tap **End Set** to finalize pending metrics. The result shows reps, target outcome, qualified slowdown when available, and one constrained next-set recommendation.
-5. During rest, start the next set with the current prescription, adjust supported inputs, or finish the workout. Set review remains optional until the summary; confirmed sets appear in the notebook.
+5. During rest, start the next set, adjust its prescription, or finish the workout. Automatic or corrected RIR can inform rest guidance and later bounded load recommendations. Confirmed sets appear in the notebook.
 
-Empty sets are never created. Disconnects and silent streams interrupt the workout and retain detected reps. A rep crossing a confirmed manual boundary is excluded. Confirmed workout history is separate from replayable sensor archives, so an incorrect detection does not become permanent without review. [Load-prediction research](LOAD-PREDICTION-RESEARCH.md) documents the current estimate, evidence, limitations, and personalization plan.
+Empty sets are never created. Disconnects and silent streams interrupt the workout and retain detected reps. A rep crossing a confirmed manual boundary is excluded. Confirmed workout history is separate from replayable sensor archives, so an incorrect detection does not become permanent without review. [Automatic-RIR research](RIR-VELOCITY-RESEARCH.md), [rest-time research](REST-TIME-RESEARCH.md), and [load-prediction research](LOAD-PREDICTION-RESEARCH.md) document the current models, evidence, and limits.
 
 ## Interface design
 

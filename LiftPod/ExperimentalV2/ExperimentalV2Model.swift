@@ -3,7 +3,7 @@ import Foundation
 
 @MainActor
 final class ExperimentalV2Model: ObservableObject {
-    @Published var countingMode: RepCountingMode = .exercise { didSet { refreshProfile() } }
+    @Published var countingMode: RepCountingMode = .generic { didSet { refreshProfile() } }
     @Published var selectedExercise: V2Exercise = .bicepsCurl { didSet { refreshProfile() } }
     @Published var selectedSide: ExperimentalSensorSide = .right { didSet { refreshProfile() } }
     @Published var selectedAlgorithm: V6Algorithm = .adaptiveAxis {

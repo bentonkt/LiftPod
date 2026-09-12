@@ -11,7 +11,9 @@ final class LateralRaiseIntegrationTests: XCTestCase {
         let prefs = UserDefaults(suiteName: name)!
         defer { prefs.removePersistentDomain(forName: name) }
         let model = ExperimentalV2Model(preferences: prefs)
+        XCTAssertEqual(model.countingMode, .generic)
         XCTAssertEqual(model.profile?.identity.algorithm, .adaptiveAxis)
+        model.countingMode = .exercise
         model.selectedExercise = .lateralRaise
         XCTAssertEqual(model.profile?.identity.algorithm, .gravityTilt)
         XCTAssertNil(model.unavailableMessage)
@@ -24,7 +26,6 @@ final class LateralRaiseIntegrationTests: XCTestCase {
         XCTAssertNotNil(model.unavailableMessage)
         model.countingMode = .generic
         XCTAssertNil(model.unavailableMessage)
-        model.countingMode = .exercise
         model.selectedSide = .right
         model.selectedExercise = .overheadPress
         XCTAssertNil(model.profile)

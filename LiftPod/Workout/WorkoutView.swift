@@ -137,7 +137,7 @@ struct WorkoutView: View {
             Button { showingSetup = true } label: {
                 VStack(spacing: 6) {
                     Text(workout.prescription.exercise.rawValue).font(.subheadline.weight(.semibold))
-                    Text("\(workout.prescription.loadLB.formatted()) lb · \(workout.prescription.minimumReps)–\(workout.prescription.maximumReps) reps")
+                    Text("\(workout.prescription.loadLB.formatted()) lb · \(workout.prescription.minimumReps)–\(workout.prescription.maximumReps) reps · \(workout.prescription.targetRIR) RIR")
                         .font(.footnote).foregroundStyle(.secondary)
                     Label("Workout setup", systemImage: "slider.horizontal.3").font(.footnote)
                 }.frame(maxWidth: .infinity).padding(18).glass(radius: 22)
@@ -190,7 +190,9 @@ struct WorkoutView: View {
                 }
                 Text(set.targetDescription).font(.subheadline).foregroundStyle(.secondary)
             }.accessibilityIdentifier("set-result")
-            if let plan = set.nextSetPlan {
+            if let prediction = workout.loadPrediction() {
+                nextSetCard(prediction)
+            } else if let plan = set.nextSetPlan {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("NEXT SET").font(.caption.weight(.semibold)).tracking(1.6).foregroundStyle(.secondary)
                     Text(plan.title).font(.system(size: 24, weight: .semibold))
@@ -198,8 +200,13 @@ struct WorkoutView: View {
                 }.padding(22).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 24)
                     .accessibilityIdentifier("next-set-plan")
             }
-            Label("Rest · \(clock(max(0, now - (workout.restStart ?? now))))", systemImage: "timer")
-                .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Label("Rest · \(clock(max(0, now - (workout.restStart ?? now))))", systemImage: "timer")
+                if let recommendation = workout.restRecommendation {
+                    Text("Suggested \(clock(Double(recommendation.seconds)))")
+                        .fontWeight(.semibold).foregroundStyle(LiftStyle.blue)
+                }
+            }.font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
             Spacer(minLength: 12)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -297,26 +304,40 @@ struct WorkoutView: View {
             Form {
                 Section("Workout") {
                     Picker("Exercise", selection: $workout.prescription.exercise) {
-                        ForEach([V2Exercise.bicepsCurl, .lateralRaise]) { Text($0.rawValue).tag($0) }
+                        ForEach(V2Exercise.allCases) { Text($0.rawValue).tag($0) }
                     }.disabled(workout.isRunning)
-                    if !workout.supportedExercise { Text("This exercise profile is not available yet.").foregroundStyle(.secondary) }
                     HStack {
                         Text("Load (lb)")
                         TextField("Load", value: $workout.prescription.loadLB, format: .number)
                             .keyboardType(.decimalPad).multilineTextAlignment(.trailing).accessibilityIdentifier("workout-load")
                     }
+                }
+                Section("Planning") {
+                    Picker("Goal", selection: $workout.prescription.goal) {
+                        ForEach(TrainingGoal.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .onChange(of: workout.prescription.goal) { _, _ in
+                        workout.applyGoalDefaults()
+                    }
                     Stepper("Minimum reps: \(workout.prescription.minimumReps)", value: $workout.prescription.minimumReps, in: 1...workout.prescription.maximumReps)
                     Stepper("Maximum reps: \(workout.prescription.maximumReps)", value: $workout.prescription.maximumReps, in: workout.prescription.minimumReps...100)
+                    Stepper("Target RIR: \(workout.prescription.targetRIR)", value: $workout.prescription.targetRIR, in: 0...4)
+                    Picker("Weight increment", selection: $workout.prescription.equipmentIncrementLB) {
+                        Text("2.5 lb").tag(2.5)
+                        Text("5 lb").tag(5.0)
+                        Text("10 lb").tag(10.0)
+                    }
                 }
                 if workout.session == nil {
                     Section("Mount") {
                         Toggle("Right AirPod and mount confirmed", isOn: $workout.mountConfirmed)
-                        Text("Use the tested right-AirPod mounting orientation. Exercise selection is manual.").font(.footnote)
+                        Text("Use a secure, consistent mounting orientation. LiftPod learns the repeated movement within each set.")
+                            .font(.footnote)
                     }
                     Section { Button("Open diagnostics") { diagnosticsPending = true; showingSetup = false } }
                 }
                 Section {
-                    Text("Start and end each set explicitly. Changes made between sets apply to the next set.")
+                    Text("Start and end each set explicitly. RIR and available weight increments guide the next set.")
                     if !workout.prescription.isValid { Text("Enter a load from 0 to 1,000 lb and a valid rep range.").foregroundStyle(.orange) }
                 }.font(.footnote)
             }
@@ -358,7 +379,7 @@ struct WorkoutView: View {
         if capture.recordingActive { return "Stop raw recording in diagnostics to begin." }
         if !capture.monitoringActive { return "Connect your AirPod to begin." }
         if liveSensor == .leftHeadphone {
-            return "Motion is coming from the left AirPod. The selected profile needs the right AirPod. Put the left AirPod in its case, then reconnect motion."
+            return "Motion is coming from the left AirPod. Workout counting is using the right AirPod. Put the left AirPod in its case, then reconnect motion."
         }
         if let sensor = liveSensor, sensor != .rightHeadphone {
             return "Motion is arriving, but iOS has not identified the AirPod side. Reconnect the right AirPod."
@@ -377,6 +398,32 @@ struct WorkoutView: View {
     }
     private func metric(_ name: String, _ value: String) -> some View {
         HStack { Text(name).foregroundStyle(.secondary); Spacer(); Text(value).fontWeight(.medium).monospacedDigit() }.font(.system(size: 15))
+    }
+    private func nextSetCard(_ prediction: LoadPrediction) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("NEXT SET")
+                .font(.caption.weight(.semibold)).tracking(1.4).foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(prediction.loadLB.formatted()) lb × \(prediction.targetReps)")
+                    .font(.system(size: 26, weight: .semibold)).monospacedDigit()
+                Spacer()
+                Text("\(prediction.targetRIR) RIR")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(LiftStyle.blue)
+            }
+            Text(prediction.explanation).font(.footnote).foregroundStyle(.secondary)
+            HStack {
+                Text(prediction.confidence.rawValue).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button(prediction.loadLB == workout.prescription.loadLB ? "Selected" : "Use for next set") {
+                    workout.use(prediction)
+                }
+                .font(.subheadline.weight(.semibold))
+                .disabled(prediction.loadLB == workout.prescription.loadLB)
+            }
+        }
+        .padding(18).frame(maxWidth: .infinity, alignment: .leading).glass(radius: 22)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("next-set-plan")
     }
     private func clock(_ seconds: Double) -> String {
         let value = seconds.isFinite ? max(0, Int(seconds)) : 0
@@ -397,7 +444,7 @@ private struct SetReviewView: View {
         self.confirm = confirm
         _loadLB = State(initialValue: draft.loadLB)
         _reps = State(initialValue: draft.detectedReps)
-        _repsInReserve = State(initialValue: nil)
+        _repsInReserve = State(initialValue: draft.automaticRIR?.repsInReserve)
     }
 
     private var valid: Bool {
@@ -425,7 +472,29 @@ private struct SetReviewView: View {
                         Text("Not entered").tag(Int?.none)
                         ForEach(0...10, id: \.self) { Text("\($0)").tag(Int?.some($0)) }
                     }
-                    Text("RIR means how many more good reps you believe you could have completed. It improves future load and suggested-rest estimates.")
+                    if let estimate = draft.automaticRIR {
+                        LabeledContent("Automatic RIR",
+                            value: estimate.cappedAtFourPlus ? "4+" : "\(estimate.repsInReserve)")
+                        LabeledContent("Rep speed loss",
+                            value: "\(estimate.velocityLossPercent.formatted(.number.precision(.fractionLength(0))))%")
+                        LabeledContent("Model", value: estimate.method.rawValue)
+                        Text("\(estimate.confidence.rawValue). Based on \(estimate.measuredRepCount) finalized rep speeds" +
+                             (estimate.calibrationSetCount > 0 ? " and \(estimate.calibrationSetCount) corrected sets." : ". Correct it when needed so the personal model can learn."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Automatic RIR needs finalized speed data for at least three reps, including the last rep. Enter RIR if speed quality was insufficient.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let rir = repsInReserve,
+                       let rest = RestRecommendation(
+                           reps: reps, repsInReserve: min(4, rir),
+                           velocityLossPercent: reps == draft.detectedReps
+                               ? draft.velocityProfile?.velocityLossPercent : nil
+                       ) {
+                        LabeledContent("Suggested rest", value: restClock(rest.seconds))
+                        Text(rest.explanation).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("RIR means how many more good reps you believe you could have completed. The confirmed value drives suggested rest and future load estimates.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
@@ -439,6 +508,10 @@ private struct SetReviewView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Later") { dismiss() } } }
         }.tint(LiftStyle.blue)
+    }
+
+    private func restClock(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 
