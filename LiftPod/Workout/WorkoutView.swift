@@ -167,7 +167,19 @@ struct WorkoutView: View {
                     Text("Set ends in \(Int(ceil(remaining)))s without another rep").font(.footnote)
                 } else {
                     Text(workout.completedSets.isEmpty ? "Your first complete rep starts the set." : "Set complete. Ready for your next set.")
-                    if let rest = workout.restStart { Text("Rest · \(clock(workout.sourceTime - rest))").monospacedDigit() }
+                    if let rest = workout.restStart {
+                        HStack(spacing: 8) {
+                            Text("Rest · \(clock(workout.sourceTime - rest))")
+                            if let recommendation = workout.restRecommendation {
+                                Text("Suggested \(clock(Double(recommendation.seconds)))")
+                                    .fontWeight(.semibold).foregroundStyle(LiftStyle.blue)
+                                    .padding(.horizontal, 9).padding(.vertical, 5)
+                                    .background(LiftStyle.blue.opacity(0.11), in: Capsule())
+                            } else if !workout.pendingSetReviews.isEmpty {
+                                Text("Confirm RIR for rest target").font(.footnote)
+                            }
+                        }.monospacedDigit()
+                    }
                 }
             }.font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if workout.session?.current == nil && workout.state == .active {
@@ -284,13 +296,15 @@ struct WorkoutView: View {
                     if !workout.prescription.isValid { Text("Enter a load from 0 to 1,000 lb and a valid rep range.").foregroundStyle(.orange) }
                 }.font(.footnote)
                 if let prediction = workout.loadPrediction() {
-                    Section("Last confirmed performance") {
+                    Section("Load estimate") {
                         Text("\(prediction.source.loadLB.formatted()) lb × \(prediction.source.reps)" +
                              (prediction.source.repsInReserve.map { " @ \($0) RIR" } ?? ""))
                         Button("Use estimated \(prediction.loadLB.formatted()) lb") {
                             workout.prescription.loadLB = prediction.loadLB
                         }
-                        Text("Early estimate from reps + RIR and estimated 1RM. Always verify the load before training.")
+                        Text("\(prediction.confidence.rawValue) from \(prediction.sourceCount) confirmed " +
+                             (prediction.sourceCount == 1 ? "set" : "sets") +
+                             ". Uses a public-data load curve with reps + RIR. Always verify the load.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -400,7 +414,7 @@ private struct SetReviewView: View {
                         Text("Not entered").tag(Int?.none)
                         ForEach(0...10, id: \.self) { Text("\($0)").tag(Int?.some($0)) }
                     }
-                    Text("RIR means how many more good reps you believe you could have completed. It improves future load estimates.")
+                    Text("RIR means how many more good reps you believe you could have completed. It improves future load and suggested-rest estimates.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {

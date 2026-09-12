@@ -25,7 +25,7 @@ The default screen accepts a manually selected exercise, goal, load in pounds, a
 1. Connect motion, confirm the right-AirPod mount, and tap **Start Workout**.
 2. Hold still while the detector prepares. The first completed rep opens a set.
 3. Each completed rep resets the inactivity timer. After **12 seconds without a completed rep**, the set closes and opens a review with detected reps, entered weight, and optional RIR. Shorter pauses remain in the same set.
-4. The workout stays active during rest. The next complete rep starts a new set automatically. **End this set now** remains an optional manual control.
+4. The workout stays active during rest. After reps and RIR are confirmed, the rest timer shows a research-based suggestion. The next complete rep starts a new set immediately at any time. **End this set now** remains an optional manual control.
 5. Confirm or edit each set to add it to that day's workout. Open the notebook icon to browse confirmed workouts grouped by day. Tap **End Workout** to finalize the sensor recording.
 
 Empty sets are never created. Disconnects and silent streams interrupt the workout and retain detected reps. A rep crossing a confirmed manual boundary is excluded. Confirmed workout history is separate from replayable sensor archives, so an incorrect detection does not become permanent without review. [Load-prediction research](LOAD-PREDICTION-RESEARCH.md) documents the current estimate, evidence, limitations, and personalization plan.

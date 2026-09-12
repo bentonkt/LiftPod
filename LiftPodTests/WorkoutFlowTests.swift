@@ -2,6 +2,15 @@ import XCTest
 @testable import LiftPod
 
 final class WorkoutSummaryTests: XCTestCase {
+    func testRestRecommendationUsesRepsAndProximityToFailure() throws {
+        XCTAssertEqual(try XCTUnwrap(RestRecommendation(reps: 8, repsInReserve: 3)).seconds, 90)
+        XCTAssertEqual(try XCTUnwrap(RestRecommendation(reps: 8, repsInReserve: 2)).seconds, 120)
+        XCTAssertEqual(try XCTUnwrap(RestRecommendation(reps: 8, repsInReserve: 1)).seconds, 150)
+        XCTAssertEqual(try XCTUnwrap(RestRecommendation(reps: 8, repsInReserve: 0)).seconds, 180)
+        XCTAssertEqual(try XCTUnwrap(RestRecommendation(reps: 12, repsInReserve: 2)).seconds, 150)
+        XCTAssertNil(RestRecommendation(reps: 12, repsInReserve: 5))
+    }
+
     func testLedgerKeepsMoreThanTwelveRepsAndIgnoresDuplicatesAndRejectedCycles() {
         var ledger = WorkoutRepLedger()
         let events = (0..<20).map { event($0) }
@@ -205,8 +214,10 @@ final class WorkoutHistoryTests: XCTestCase {
         let draft = SetReviewDraft(sessionID: UUID(), set: set)
         XCTAssertTrue(store.confirm(draft, loadLB: 30, reps: 12, repsInReserve: 2))
         let prediction = store.prediction(for: .bicepsCurl, targetReps: 8, targetRIR: 2)
-        XCTAssertEqual(prediction?.estimatedOneRepMaxLB ?? 0, 44, accuracy: 0.001)
+        XCTAssertEqual(prediction?.estimatedCapacityLB ?? 0, 58.2185, accuracy: 0.001)
         XCTAssertEqual(prediction?.loadLB, 35)
+        XCTAssertEqual(prediction?.sourceCount, 1)
+        XCTAssertEqual(prediction?.confidence, .low)
     }
 
     func testPredictionRequiresRIRRatherThanInventingEffort() {
@@ -220,6 +231,24 @@ final class WorkoutHistoryTests: XCTestCase {
                                     loadLB: 30, reps: 12, repsInReserve: nil))
         XCTAssertNil(store.prediction(for: .bicepsCurl, targetReps: 8, targetRIR: 2))
     }
+
+    func testPredictionCombinesConsistentConfirmedSets() {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let store = WorkoutHistoryStore(fileURL: file)
+        for index in 0..<3 {
+            let set = SessionSet(id: "set-\(index)", prescription: .init(),
+                                 reps: [.init(id: "rep-\(index)", start: 0, end: 2)])
+            XCTAssertTrue(store.confirm(SetReviewDraft(sessionID: UUID(), set: set,
+                endedAt: Date().addingTimeInterval(Double(index))),
+                loadLB: 30, reps: 12, repsInReserve: 2))
+        }
+        let prediction = store.prediction(for: .bicepsCurl, targetReps: 8, targetRIR: 2)
+        XCTAssertEqual(prediction?.loadLB, 35)
+        XCTAssertEqual(prediction?.sourceCount, 3)
+        XCTAssertEqual(prediction?.confidence, .medium)
+    }
 }
 
 @MainActor
@@ -231,6 +260,19 @@ private final class TestWorkoutConsumer: WorkoutMotionConsumer {
 }
 
 final class AutomaticSetBoundaryTests: XCTestCase {
+    func testSuggestedRestNeverBlocksTheNextSet() {
+        var session = WorkoutSessionReducer(prescription: .init())
+        session.apply(.rep(.init(id: "first", start: 0, end: 2)))
+        session.apply(.clock(14))
+        XCTAssertNil(session.current)
+
+        // Only 18 seconds have elapsed since the prior rep. The next rep still
+        // starts a set because suggested rest is display-only.
+        session.apply(.rep(.init(id: "next", start: 20, end: 22)))
+        XCTAssertEqual(session.current?.reps.map(\.id), ["next"])
+        XCTAssertEqual(session.sets.count, 1)
+    }
+
     func testSetEndsAtTwelveSecondsNotBeforeAndNoEmptySetsAppear() {
         var session = WorkoutSessionReducer(prescription: .init())
         session.apply(.clock(50))

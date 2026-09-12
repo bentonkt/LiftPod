@@ -103,6 +103,13 @@ final class WorkoutModel: ObservableObject, WorkoutMotionConsumer {
     var timeoutRemaining: Double? {
         session?.current.map { max(0, 12 - (sourceTime - $0.end)) }
     }
+    var restRecommendation: RestRecommendation? {
+        guard session?.current == nil, let sourceSetID = completedSets.last?.id,
+              let confirmed = history.sets.first(where: {
+                  $0.sessionID == sessionID && $0.sourceSetID == sourceSetID
+              }), let rir = confirmed.repsInReserve else { return nil }
+        return RestRecommendation(reps: confirmed.reps, repsInReserve: rir)
+    }
 
     func updateNextSet() {
         guard prescription.isValid, supportedExercise else { error = "Choose an available exercise and valid target."; return }

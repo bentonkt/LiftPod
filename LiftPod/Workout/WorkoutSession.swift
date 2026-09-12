@@ -165,8 +165,34 @@ struct WorkoutDay: Identifiable, Equatable {
 
 struct LoadPrediction: Equatable {
     let loadLB: Double
-    let estimatedOneRepMaxLB: Double
+    let estimatedCapacityLB: Double
     let source: LoggedWorkoutSet
+    let sourceCount: Int
+    let confidence: Confidence
+
+    enum Confidence: String, Equatable {
+        case low = "Low confidence"
+        case medium = "Medium confidence"
+        case high = "High confidence"
+    }
+}
+
+struct RestRecommendation: Equatable {
+    let seconds: Int
+    let reps: Int
+    let repsInReserve: Int
+
+    init?(reps: Int, repsInReserve: Int) {
+        guard (1...100).contains(reps), (0...4).contains(repsInReserve) else { return nil }
+        // A 90-second floor follows the 2024 hypertrophy meta-analysis. The
+        // graduated RIR and high-repetition additions are deliberately coarse:
+        // controlled studies support their direction, not an exact curl formula.
+        let proximityAddition = 30 * max(0, 3 - repsInReserve)
+        let highRepAddition = reps >= 12 ? 30 : 0
+        seconds = 90 + proximityAddition + highRepAddition
+        self.reps = reps
+        self.repsInReserve = repsInReserve
+    }
 }
 
 /// Stores only user-confirmed sets. Detector output remains a review draft until
@@ -216,20 +242,77 @@ final class WorkoutHistoryStore: ObservableObject {
         return true
     }
 
-    /// A transparent first-pass estimate for future personalization. Reps plus
-    /// RIR approximate reps-to-failure; Epley's relationship estimates 1RM, then
-    /// the equation is inverted for the requested rep/RIR target and rounded to
-    /// equipment increments. Treat this as a suggestion, never an automatic edit.
+    /// Estimates a comparable load from confirmed, near-failure performances.
+    /// The load-dependent curve comes from Marzagao's 303,494-set public dataset.
+    /// RIR is added to completed reps as an explicit product adaptation, so the
+    /// result remains a user-reviewed suggestion rather than an automatic edit.
     func prediction(for exercise: V2Exercise, targetReps: Int, targetRIR: Int,
                     incrementLB: Double = 5) -> LoadPrediction? {
-        guard let source = sets.first(where: { $0.exercise == exercise }),
-              let sourceRIR = source.repsInReserve, source.loadLB > 0,
-              (1...30).contains(source.reps + sourceRIR),
-              (1...30).contains(targetReps + targetRIR), incrementLB > 0 else { return nil }
-        let estimatedMax = source.loadLB * (1 + Double(source.reps + sourceRIR) / 30)
-        let raw = estimatedMax / (1 + Double(targetReps + targetRIR) / 30)
-        return LoadPrediction(loadLB: (raw / incrementLB).rounded() * incrementLB,
-                              estimatedOneRepMaxLB: estimatedMax, source: source)
+        let targetEffortReps = targetReps + targetRIR
+        guard (2...15).contains(targetEffortReps), (0...4).contains(targetRIR),
+              incrementLB.isFinite, incrementLB > 0 else { return nil }
+
+        let observations = sets.filter { set in
+            guard set.exercise == exercise, let rir = set.repsInReserve else { return false }
+            return set.loadLB >= Self.minimumModelLoadLB && (0...4).contains(rir) &&
+                (2...15).contains(set.reps + rir)
+        }.prefix(8).enumerated().compactMap { index, set -> (capacity: Double, weight: Double, set: LoggedWorkoutSet)? in
+            guard let rir = set.repsInReserve,
+                  let capacity = Self.estimatedCapacity(loadLB: set.loadLB,
+                                                        repsToFailure: set.reps + rir) else { return nil }
+            // Recent performances matter more; higher RIR receives less weight
+            // because subjective RIR is less accurate farther from failure.
+            let recencyWeight = pow(0.85, Double(index))
+            let effortWeight = 1 / (1 + 0.25 * Double(rir))
+            return (capacity, recencyWeight * effortWeight, set)
+        }
+        guard let source = observations.first?.set, !observations.isEmpty else { return nil }
+
+        let totalWeight = observations.reduce(0) { $0 + $1.weight }
+        let capacity = observations.reduce(0) { $0 + $1.capacity * $1.weight } / totalWeight
+        let dispersion = observations.reduce(0) {
+            $0 + abs($1.capacity - capacity) * $1.weight
+        } / totalWeight / capacity
+        guard let rawLoad = Self.load(forCapacityLB: capacity, repsToFailure: targetEffortReps) else { return nil }
+        let roundedLoad = max(0, (rawLoad / incrementLB).rounded() * incrementLB)
+        let confidence: LoadPrediction.Confidence
+        if observations.count >= 5 && dispersion <= 0.08 {
+            confidence = .high
+        } else if observations.count >= 3 && dispersion <= 0.15 {
+            confidence = .medium
+        } else {
+            confidence = .low
+        }
+        return LoadPrediction(loadLB: roundedLoad, estimatedCapacityLB: capacity,
+                              source: source, sourceCount: observations.count,
+                              confidence: confidence)
+    }
+
+    private static let poundsPerKilogram = 2.2046226218
+    private static let minimumModelLoadLB = 4 * poundsPerKilogram
+
+    /// Weight-dependent equation reported by Marzagao (2026). Kilograms are
+    /// required because absolute load is an input to the fitted relationship.
+    private static func estimatedCapacity(loadLB: Double, repsToFailure: Int) -> Double? {
+        let loadKG = loadLB / poundsPerKilogram
+        guard loadKG >= 4, (2...15).contains(repsToFailure) else { return nil }
+        let denominator = -2.55 + 4.58 * log(loadKG)
+        guard denominator > 0 else { return nil }
+        let capacityKG = loadKG * (1 + pow(Double(repsToFailure - 1), 0.85) / denominator)
+        return capacityKG.isFinite ? capacityKG * poundsPerKilogram : nil
+    }
+
+    private static func load(forCapacityLB capacityLB: Double, repsToFailure: Int) -> Double? {
+        var lower = minimumModelLoadLB
+        var upper = 1_000.0
+        guard let minimumCapacity = estimatedCapacity(loadLB: lower, repsToFailure: repsToFailure),
+              capacityLB >= minimumCapacity else { return nil }
+        for _ in 0..<80 {
+            let midpoint = (lower + upper) / 2
+            guard let estimate = estimatedCapacity(loadLB: midpoint, repsToFailure: repsToFailure) else { return nil }
+            if estimate < capacityLB { lower = midpoint } else { upper = midpoint }
+        }
+        return (lower + upper) / 2
     }
 
     private func load() {

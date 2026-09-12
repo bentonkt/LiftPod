@@ -12,11 +12,12 @@ Current scope: native iPhone workout tracking, manual exercise selection, automa
 - Review setup remains enabled while waiting for motion. Only starting a workout requires a live right-side stream and confirmed setup.
 - A completed set opens a review sheet with editable weight and reps plus optional RIR. Only confirmed sets enter permanent workout history.
 - The notebook icon opens confirmed workouts grouped by day, with set count and daily volume.
-- Setup can offer a rounded next-load estimate when the latest confirmed set includes RIR; the user must explicitly choose it and can edit it afterward.
+- Setup can offer a rounded next-load estimate from up to eight eligible confirmed sets. It shows low, medium, or high confidence; the user must explicitly choose it and can edit it afterward.
 - White/blue visual language, translucent controls, concentric rep halo, lowercase wordmark, and timeline summary translated into SwiftUI.
 - Setup moved to a sheet so load, goal, rep range, and mount confirmation remain available without crowding the reference's ready screen.
 - Live status distinguishes live right-AirPod motion from waiting/disconnected states. A simulated Bluetooth connection never enables a workout.
 - Added preparation, finalizing, empty workout, interruption, between-set rest, and 12-second timeout messages missing from the main mockup.
+- The between-set timer shows a simple research-based rest suggestion after the completed set's reps and RIR are confirmed. It never blocks the next set.
 - Rep pulse follows actual completed reps and honors Reduce Motion. No synthetic rep generation or automatic exercise switching.
 - Workout timer uses sensor-source elapsed time; active rep time sums accepted rep durations. Average pace is measured whole-rep duration, not speed.
 - Per-set timeline adds actual load, rep target, and interruption status.
